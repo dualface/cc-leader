@@ -24,6 +24,7 @@ function printHelp() {
   state:set [--state-file <path>] --set key=value [--set key=value ...]
   resolve-phase [--state-file <path>]
   report [--state-file <path>] [--final-report-path <path>]
+  run [--state-file <path>] [--write-scope <path>] [--timeout-seconds <n>]
   prepare-job --job <name> [--state-file <path>] [--phase-id <id>] [--write-scope <path>] [--phase-review-path <path> ...] [--override key=value ...]
   dispatch --job <name> [--state-file <path>] [--phase-id <id>] [--write-scope <path>] [--phase-review-path <path> ...] [--override key=value ...] [--timeout-seconds <n>] [--dry-run]
 `);
@@ -235,7 +236,7 @@ function readStatusFromMarkdown(filePath) {
 }
 
 function resolvePhase(state) {
-  if (!state.spec_approved) return "drafting-specs";
+  if (!state.spec_approved || !state.spec_review_passed) return "drafting-specs";
   if (!state.phase_plan_list_path || !state.phase_plan_review_passed) return "writing-phase-plans";
 
   const allPhaseIds = parsePhaseIdsFromPlan(state.phase_plan_list_path);
@@ -354,6 +355,75 @@ function resolvePhaseArtifactPath(dirPath, phaseId, suffix) {
   candidates.push(abs(deriveArtifactPath(artifactName, phaseId)));
 
   return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0] ?? null;
+}
+
+function selectNextJob(phase, state) {
+  const allPhaseIds = parsePhaseIdsFromPlan(state.phase_plan_list_path);
+  const readyPhaseIds = new Set(state.ready_phase_ids ?? []);
+  const completedPhaseIds = new Set(state.completed_phase_ids ?? []);
+  const reviewedPhaseIds = new Set(state.reviewed_phase_ids ?? []);
+
+  if (phase === "drafting-specs" && state.spec_approved && !state.spec_review_passed) {
+    return { jobName: "specAdversarialReview" };
+  }
+
+  if (phase === "writing-phase-plans") {
+    return { jobName: "phasePlanSynthesis" };
+  }
+
+  if (phase === "writing-phase-tasks") {
+    const phaseId = allPhaseIds.find((id) => !readyPhaseIds.has(id));
+    return phaseId ? { jobName: "phaseTaskSynthesis", phaseId } : null;
+  }
+
+  if (phase === "executing-phase-tasks") {
+    const phaseId = allPhaseIds.find((id) => readyPhaseIds.has(id) && !completedPhaseIds.has(id));
+    return phaseId ? { jobName: "phaseExecution", phaseId } : null;
+  }
+
+  if (phase === "reviewing-phase-results") {
+    const phaseId = allPhaseIds.find((id) => completedPhaseIds.has(id) && !reviewedPhaseIds.has(id));
+    if (phaseId) {
+      return { jobName: "phaseReview", phaseId };
+    }
+
+    const allReviewed =
+      allPhaseIds.length > 0 && allPhaseIds.every((id) => reviewedPhaseIds.has(id));
+    if (!allReviewed || readStatusFromMarkdown(state.final_spec_review_path) === "pass") {
+      return null;
+    }
+
+    return {
+      jobName: "finalSpecReview",
+      phaseReviewPaths: allPhaseIds
+        .filter((id) => reviewedPhaseIds.has(id))
+        .map((id) => resolvePhaseArtifactPath(state.phase_review_dir, id, "review")),
+    };
+  }
+
+  return null;
+}
+
+function buildRunDispatchArgs(runArgs, selection) {
+  const dispatchArgs = {};
+
+  if (runArgs["timeout-seconds"] != null) {
+    dispatchArgs["timeout-seconds"] = runArgs["timeout-seconds"];
+  }
+
+  if (selection.phaseId) {
+    dispatchArgs["phase-id"] = selection.phaseId;
+  }
+
+  if (selection.jobName === "phaseExecution" && runArgs["write-scope"]) {
+    dispatchArgs["write-scope"] = runArgs["write-scope"];
+  }
+
+  if (selection.jobName === "finalSpecReview") {
+    dispatchArgs["phase-review-path"] = selection.phaseReviewPaths;
+  }
+
+  return dispatchArgs;
 }
 
 function buildJobContext(jobName, state, args) {
@@ -747,91 +817,43 @@ function createRollbackAnchor(jobContext) {
   console.warn(`warn: 创建 rollback tag 失败 (${tagName}): ${detail}`);
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const command = args._[0];
-  const stateFile = args["state-file"] ?? stateFileDefault;
+async function executeReportCommand(stateFile, args) {
+  const state = await withStateLock(stateFile, async () => {
+    const next = readState(stateFile);
+    if (!next.workflow_id) fail("report 需要 workflow_id");
+    if (!next.spec_path || !next.phase_plan_list_path || !next.final_spec_review_path) {
+      fail("report 需要 spec_path、phase_plan_list_path、final_spec_review_path");
+    }
+    if (readStatusFromMarkdown(next.final_spec_review_path) !== "pass") {
+      fail("report 需要 final spec review 为 pass");
+    }
+    const allPhaseIds = parsePhaseIdsFromPlan(next.phase_plan_list_path);
+    const missingReviewed = allPhaseIds.filter(
+      (phaseId) => !(next.reviewed_phase_ids ?? []).includes(phaseId),
+    );
+    if (missingReviewed.length > 0) {
+      fail(`report 前仍有未通过 review 的 phase: ${missingReviewed.join(", ")}`);
+    }
+    if (resolvePhase(next) !== "reporting-results") {
+      fail(`report 只允许在 reporting-results 阶段执行，当前是 ${resolvePhase(next)}`);
+    }
 
-  if (!command || command === "help" || command === "--help") {
-    printHelp();
-    return;
-  }
-
-  if (command === "init") {
-    const state = await withStateLock(stateFile, async () => {
-      const next = structuredClone(manifest.sessionState.initialState);
-      ensureWorkflowId(next, args.slug ?? path.basename(root), args["workflow-id"] ?? null);
-      if (!args.force && existsSync(abs(stateFile))) {
-        fail(`state 已存在: ${stateFile}。如要覆盖，加 --force`);
-      }
-      next.current_phase = resolvePhase(next);
-      saveState(stateFile, next);
-      return next;
-    });
-    console.log(JSON.stringify({ stateFile: repoRel(abs(stateFile)), state }, null, 2));
-    return;
-  }
-
-  if (command === "state:get") {
-    console.log(JSON.stringify(readState(stateFile), null, 2));
-    return;
-  }
-
-  if (command === "state:set") {
-    const state = await withStateLock(stateFile, async () => {
-      const next = readState(stateFile);
-      applySets(next, args.set ?? []);
-      next.current_phase = resolvePhase(next);
-      saveState(stateFile, next);
-      return next;
-    });
-    console.log(JSON.stringify(state, null, 2));
-    return;
-  }
-
-  if (command === "resolve-phase") {
-    const state = readState(stateFile);
-    console.log(resolvePhase(state));
-    return;
-  }
-
-  if (command === "report") {
-    const state = await withStateLock(stateFile, async () => {
-      const next = readState(stateFile);
-      if (!next.workflow_id) fail("report 需要 workflow_id");
-      if (!next.spec_path || !next.phase_plan_list_path || !next.final_spec_review_path) {
-        fail("report 需要 spec_path、phase_plan_list_path、final_spec_review_path");
-      }
-      if (readStatusFromMarkdown(next.final_spec_review_path) !== "pass") {
-        fail("report 需要 final spec review 为 pass");
-      }
-      const allPhaseIds = parsePhaseIdsFromPlan(next.phase_plan_list_path);
-      const missingReviewed = allPhaseIds.filter(
-        (phaseId) => !(next.reviewed_phase_ids ?? []).includes(phaseId),
-      );
-      if (missingReviewed.length > 0) {
-        fail(`report 前仍有未通过 review 的 phase: ${missingReviewed.join(", ")}`);
-      }
-      if (resolvePhase(next) !== "reporting-results") {
-        fail(`report 只允许在 reporting-results 阶段执行，当前是 ${resolvePhase(next)}`);
-      }
-
-      const finalReportPath =
-        args["final-report-path"] ?? next.final_report_path ?? deriveArtifactPath("finalReport", next.workflow_id);
-      const originalGoal = extractSection(next.spec_path, "目标") ?? `见 ${next.spec_path}`;
-      const phaseLines = allPhaseIds.length
-        ? allPhaseIds.map((phaseId) => {
-          const phaseResultPath = resolvePhaseArtifactPath(next.phase_result_dir, phaseId, "result");
-          const phaseSummary = extractSection(phaseResultPath, "阶段摘要");
-          if (!phaseSummary) {
-            return `### ${phaseId}\n\n- 阶段摘要缺失`;
-          }
-          return `### ${phaseId}\n\n${phaseSummary}`;
-        }).join("\n\n")
-        : "- none";
-      const finalReviewConclusion =
-        extractSection(next.final_spec_review_path, "结论") ?? "- final spec review pass";
-      const report = `# 最终报告: ${next.workflow_id}
+    const finalReportPath =
+      args["final-report-path"] ?? next.final_report_path ?? deriveArtifactPath("finalReport", next.workflow_id);
+    const originalGoal = extractSection(next.spec_path, "目标") ?? `见 ${next.spec_path}`;
+    const phaseLines = allPhaseIds.length
+      ? allPhaseIds.map((phaseId) => {
+        const phaseResultPath = resolvePhaseArtifactPath(next.phase_result_dir, phaseId, "result");
+        const phaseSummary = extractSection(phaseResultPath, "阶段摘要");
+        if (!phaseSummary) {
+          return `### ${phaseId}\n\n- 阶段摘要缺失`;
+        }
+        return `### ${phaseId}\n\n${phaseSummary}`;
+      }).join("\n\n")
+      : "- none";
+    const finalReviewConclusion =
+      extractSection(next.final_spec_review_path, "结论") ?? "- final spec review pass";
+    const report = `# 最终报告: ${next.workflow_id}
 
 ## 工作流摘要
 
@@ -869,50 +891,25 @@ ${finalReviewConclusion}
 
 - none
 `;
-      ensureDir(path.dirname(abs(finalReportPath)));
-      writeFileSync(abs(finalReportPath), report);
-      next.final_report_path = toRepoRelativeIfInsideRoot(finalReportPath);
-      next.current_phase = resolvePhase(next);
-      saveState(stateFile, next);
-      return next;
-    });
-    console.log(JSON.stringify({
-      final_report_path: state.final_report_path,
-      current_phase: state.current_phase,
-    }, null, 2));
-    return;
-  }
+    ensureDir(path.dirname(abs(finalReportPath)));
+    writeFileSync(abs(finalReportPath), report);
+    next.final_report_path = toRepoRelativeIfInsideRoot(finalReportPath);
+    next.current_phase = resolvePhase(next);
+    saveState(stateFile, next);
+    return next;
+  });
 
-  if (command !== "prepare-job" && command !== "dispatch") {
-    fail(`未知命令: ${command}`);
-  }
+  return {
+    final_report_path: state.final_report_path,
+    current_phase: state.current_phase,
+    state,
+  };
+}
 
-  const jobName = args.job;
-  if (!jobName) fail("缺少 --job");
-
+async function executeDispatchJob(stateFile, jobName, args) {
   const state = readState(stateFile);
   let jobContext = buildJobContext(jobName, state, args);
   const promptPath = manifest.workerJobs[jobName].dispatch.promptContractPath;
-  const promptContent = renderPrompt(promptPath, jobContext.variables);
-
-  if (command === "prepare-job" || args["dry-run"]) {
-    ensureOutputDirectories(jobContext);
-    writeFileSync(jobContext.promptFile, `${promptContent}\n`);
-    console.log(JSON.stringify({
-      mode: command === "prepare-job" ? "prepare-job" : "dry-run",
-      job: jobName,
-      workflow_id: jobContext.workflowId,
-      job_id: jobContext.jobId,
-      run_dir: repoRel(jobContext.runDir),
-      prompt_file: repoRel(jobContext.promptFile),
-      result_file: repoRel(jobContext.resultFile),
-      variables: Object.fromEntries(
-        Object.entries(jobContext.variables).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)]),
-      ),
-    }, null, 2));
-    return;
-  }
-
   const timeoutSeconds =
     args["timeout-seconds"] != null
       ? Number(args["timeout-seconds"])
@@ -922,10 +919,10 @@ ${finalReviewConclusion}
     fail("timeout-seconds 必须是正数");
   }
 
-  const maxTransportRetries = manifest.retryPolicy?.maxTransportRetriesPerJob ?? 0;
   let run = null;
   let result = null;
   let transportFailure = null;
+  const maxTransportRetries = manifest.retryPolicy?.maxTransportRetriesPerJob ?? 0;
 
   for (let attempt = 1; attempt <= maxTransportRetries + 1; attempt += 1) {
     if (attempt > 1) {
@@ -981,7 +978,10 @@ ${finalReviewConclusion}
   }
 
   if (!result) {
-    fail(JSON.stringify(transportFailure, null, 2));
+    return {
+      ok: false,
+      transportFailure,
+    };
   }
 
   const expectedOutputs = Array.isArray(result.outputs) ? result.outputs : [];
@@ -997,13 +997,236 @@ ${finalReviewConclusion}
     return next;
   });
 
-  console.log(JSON.stringify({
-    exit_code: run.exitCode,
+  return {
+    ok: true,
+    exit_code: run?.exitCode ?? 1,
     result,
     state: nextState,
     run_dir: repoRel(jobContext.runDir),
     stdout_log: repoRel(jobContext.stdoutLog),
     stderr_log: repoRel(jobContext.stderrLog),
+  };
+}
+
+async function executeRunCommand(stateFile, args) {
+  const reviseCounts = {};
+  let step = 0;
+
+  while (true) {
+    const state = readState(stateFile);
+    const phase = resolvePhase(state);
+
+    if (phase === "drafting-specs" && !state.spec_approved) {
+      return {
+        stopped: true,
+        reason: "spec 未批准, 需要用户操作",
+        phase,
+        state,
+      };
+    }
+
+    if (phase === "reporting-results") {
+      const report = await executeReportCommand(stateFile, args);
+      return {
+        stopped: false,
+        reason: "已完成",
+        phase: "reporting-results",
+        state: report.state,
+      };
+    }
+
+    const selection = selectNextJob(phase, state);
+    if (!selection) {
+      return {
+        stopped: true,
+        reason: "无法确定下一个 job",
+        phase,
+        state,
+      };
+    }
+
+    if (manifest.workerJobs[selection.jobName].writesCode && !args["write-scope"]) {
+      return {
+        stopped: true,
+        reason: "phaseExecution 需要 --write-scope, 需要用户操作",
+        phase,
+        job: selection.jobName,
+        phase_id: selection.phaseId ?? null,
+        state,
+      };
+    }
+
+    const dispatchResult = await executeDispatchJob(stateFile, selection.jobName, buildRunDispatchArgs(args, selection));
+    if (!dispatchResult.ok) {
+      return {
+        stopped: true,
+        reason: "dispatch transport failed",
+        phase,
+        job: selection.jobName,
+        phase_id: selection.phaseId ?? null,
+        transport_failure: dispatchResult.transportFailure,
+        state: readState(stateFile),
+      };
+    }
+
+    step += 1;
+    console.log(JSON.stringify({
+      step,
+      job: selection.jobName,
+      verdict: dispatchResult.result.verdict ?? null,
+      phase,
+    }));
+
+    const result = dispatchResult.result;
+    const nextState = dispatchResult.state;
+
+    if (result.verdict === "revise") {
+      reviseCounts[selection.jobName] = (reviseCounts[selection.jobName] ?? 0) + 1;
+    } else {
+      reviseCounts[selection.jobName] = 0;
+    }
+
+    if (result.status === "blocked") {
+      return {
+        stopped: true,
+        reason: "worker blocked",
+        phase,
+        result,
+        state: nextState,
+      };
+    }
+
+    const needUserDecision =
+      (selection.jobName === "specAdversarialReview" && result.verdict === "revise") ||
+      (selection.jobName === "phaseReview" && result.verdict === "fail") ||
+      (selection.jobName === "finalSpecReview" && result.verdict === "fail") ||
+      (result.verdict === "revise" && (reviseCounts[selection.jobName] ?? 0) >= 2);
+
+    if (needUserDecision) {
+      return {
+        stopped: true,
+        reason: "需要用户决策",
+        phase,
+        result,
+        state: nextState,
+      };
+    }
+
+    const autoRetryRevise =
+      (selection.jobName === "phasePlanSynthesis" || selection.jobName === "phaseTaskSynthesis") &&
+      result.verdict === "revise" &&
+      (reviseCounts[selection.jobName] ?? 0) < 2;
+
+    if (autoRetryRevise) {
+      continue;
+    }
+  }
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const command = args._[0];
+  const stateFile = args["state-file"] ?? stateFileDefault;
+
+  if (!command || command === "help" || command === "--help") {
+    printHelp();
+    return;
+  }
+
+  if (command === "init") {
+    const state = await withStateLock(stateFile, async () => {
+      const next = structuredClone(manifest.sessionState.initialState);
+      ensureWorkflowId(next, args.slug ?? path.basename(root), args["workflow-id"] ?? null);
+      if (!args.force && existsSync(abs(stateFile))) {
+        fail(`state 已存在: ${stateFile}。如要覆盖，加 --force`);
+      }
+      next.current_phase = resolvePhase(next);
+      saveState(stateFile, next);
+      return next;
+    });
+    console.log(JSON.stringify({ stateFile: repoRel(abs(stateFile)), state }, null, 2));
+    return;
+  }
+
+  if (command === "state:get") {
+    console.log(JSON.stringify(readState(stateFile), null, 2));
+    return;
+  }
+
+  if (command === "state:set") {
+    const state = await withStateLock(stateFile, async () => {
+      const next = readState(stateFile);
+      applySets(next, args.set ?? []);
+      next.current_phase = resolvePhase(next);
+      saveState(stateFile, next);
+      return next;
+    });
+    console.log(JSON.stringify(state, null, 2));
+    return;
+  }
+
+  if (command === "resolve-phase") {
+    const state = readState(stateFile);
+    console.log(resolvePhase(state));
+    return;
+  }
+
+  if (command === "report") {
+    const report = await executeReportCommand(stateFile, args);
+    console.log(JSON.stringify({
+      final_report_path: report.final_report_path,
+      current_phase: report.current_phase,
+    }, null, 2));
+    return;
+  }
+
+  if (command === "run") {
+    const summary = await executeRunCommand(stateFile, args);
+    console.log(JSON.stringify(summary));
+    return;
+  }
+
+  if (command !== "prepare-job" && command !== "dispatch") {
+    fail(`未知命令: ${command}`);
+  }
+
+  const jobName = args.job;
+  if (!jobName) fail("缺少 --job");
+
+  const state = readState(stateFile);
+  let jobContext = buildJobContext(jobName, state, args);
+  const promptPath = manifest.workerJobs[jobName].dispatch.promptContractPath;
+  const promptContent = renderPrompt(promptPath, jobContext.variables);
+
+  if (command === "prepare-job" || args["dry-run"]) {
+    ensureOutputDirectories(jobContext);
+    writeFileSync(jobContext.promptFile, `${promptContent}\n`);
+    console.log(JSON.stringify({
+      mode: command === "prepare-job" ? "prepare-job" : "dry-run",
+      job: jobName,
+      workflow_id: jobContext.workflowId,
+      job_id: jobContext.jobId,
+      run_dir: repoRel(jobContext.runDir),
+      prompt_file: repoRel(jobContext.promptFile),
+      result_file: repoRel(jobContext.resultFile),
+      variables: Object.fromEntries(
+        Object.entries(jobContext.variables).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)]),
+      ),
+    }, null, 2));
+    return;
+  }
+
+  const dispatchResult = await executeDispatchJob(stateFile, jobName, args);
+  if (!dispatchResult.ok) {
+    fail(JSON.stringify(dispatchResult.transportFailure, null, 2));
+  }
+  console.log(JSON.stringify({
+    exit_code: dispatchResult.exit_code,
+    result: dispatchResult.result,
+    state: dispatchResult.state,
+    run_dir: dispatchResult.run_dir,
+    stdout_log: dispatchResult.stdout_log,
+    stderr_log: dispatchResult.stderr_log,
   }, null, 2));
 }
 
