@@ -273,6 +273,7 @@ function sleep(ms) {
 async function withStateLock(stateFile, fn) {
   const lockDir = `${abs(stateFile)}.lock`;
   const timeoutAt = Date.now() + 30000;
+  let clearedStaleLock = false;
 
   while (true) {
     try {
@@ -280,6 +281,19 @@ async function withStateLock(stateFile, fn) {
       break;
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
+      if (!clearedStaleLock) {
+        try {
+          const ageMs = Date.now() - statSync(lockDir).mtimeMs;
+          if (ageMs > 5 * 60 * 1000) {
+            console.warn("warn: State lock 已超 5 分钟, 疑似残留, 自动清理");
+            rmSync(lockDir, { recursive: true, force: true });
+            clearedStaleLock = true;
+            continue;
+          }
+        } catch {
+          // ignore stat/rm race and fall back to normal wait loop
+        }
+      }
       if (Date.now() > timeoutAt) {
         fail(`获取 state lock 超时: ${stateFile}`);
       }
