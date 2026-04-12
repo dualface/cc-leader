@@ -1,6 +1,6 @@
 ---
 name: cc-leader-spec
-description: "Use when the user wants to start a new cc-leader workflow, write a spec, or says '/cc-leader-spec'. Guides spec drafting and adversarial review."
+description: "Use when the user wants to start or continue a cc-leader workflow, write a spec, or says '/cc-leader-spec'. Guides spec drafting, resume, and adversarial review."
 ---
 
 # 启动 Spec Workflow
@@ -18,8 +18,18 @@ description: "Use when the user wants to start a new cc-leader workflow, write a
 
 0. 建议用户切换模型: "建议切换到 Opus 4.6 (1M context) 模型以获得最佳 spec 质量。可用 /model 切换。"
 1. 确认当前就是目标项目根目录，先执行 `pwd`
-2. 确认或和用户约定 workflow slug，执行 `cc-leader init --slug <slug>`
-3. 执行 `cc-leader state:get`，读取 `workflow_id`
+2. 检测已有 workflow: 执行 `cc-leader state:get`
+   - 如果已有 workflow 且 `spec_approved == true`:
+     - 提示用户: "已有已批准的 workflow <workflow_id>, spec 在 <spec_path>。用 /cc-leader-run 继续执行。"
+     - 停止, 不重复 init
+   - 如果已有 workflow 且 `spec_approved == false` 且 `spec_path` 非空:
+     - 提示用户: "发现未完成的 workflow <workflow_id>, spec 在 <spec_path>。"
+     - 问用户: "继续编辑这个 spec, 还是放弃重开?"
+     - 用户选继续 → 跳到步骤 4, 读已有 spec 继续改
+     - 用户选重开 → 执行 `cc-leader init --slug <slug> --force`, 走正常新建流程
+   - 如果没有 workflow (state:get 报错或 workflow_id 为空):
+     - 确认或和用户约定 workflow slug, 执行 `cc-leader init --slug <slug>`
+3. 执行 `cc-leader state:get`, 读取 `workflow_id`
 4. 和用户一起按 `docs/templates/spec-template.md` 起草 spec。spec 必须包含：
    - 目标
    - 非目标
