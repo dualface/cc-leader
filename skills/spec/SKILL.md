@@ -40,6 +40,10 @@ description: "Use when the user wants to start a new cc-leader workflow, write a
    - 总结关键问题、隐含假设、建议修改
    - 和用户一起改 spec
    - 重新执行 `cc-leader dispatch --job specAdversarialReview`
+   - **强制上限: 连续 2 轮 revise 后, 必须停止自动循环, 向用户展示累积问题清单, 让用户决定:**
+     - 继续修改 spec 再审一轮
+     - override 剩余问题, 接受当前 spec
+     - 放弃本次 workflow
 10. 如果用户明确要求 override：
     - 记录 override 原因、范围、被跳过的 review 问题
     - 把 override 写进 spec 的 `Override 记录`
