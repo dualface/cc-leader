@@ -797,8 +797,14 @@ async function runCodex(jobContext, promptContent, timeoutSeconds) {
       }, 5000);
     }, timeoutSeconds * 1000);
 
-    child.stdout.pipe(stdoutStream);
-    child.stderr.pipe(stderrStream);
+    child.stdout.on("data", (chunk) => {
+      stdoutStream.write(chunk);
+      process.stderr.write(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderrStream.write(chunk);
+      process.stderr.write(chunk);
+    });
 
     child.on("error", (error) => {
       settled = true;
