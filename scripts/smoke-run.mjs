@@ -10,6 +10,9 @@ import { spawnSync } from "node:child_process";
 
 const root = process.cwd();
 const harness = path.join(root, "scripts", "cc-leader-harness.mjs");
+const exampleDir = path.join(root, "docs", "examples", "minimal-todo");
+const exampleWorkflowId = "wf-minimal-todo-20260412-ab12";
+const examplePhaseId = "phase-01-core-todo";
 
 function fail(message, extra = null) {
   console.error(message);
@@ -56,6 +59,10 @@ function readJson(file) {
 function writeText(file, text) {
   ensureDir(path.dirname(abs(file)));
   writeFileSync(abs(file), text);
+}
+
+function uniq(items) {
+  return [...new Set(items)];
 }
 
 function runNode(args, opts = {}) {
@@ -295,6 +302,10 @@ function dispatchArgs(stateFile, job, extra = []) {
   return ["dispatch", "--state-file", relative(stateFile), "--job", job, ...extra];
 }
 
+function prepareArgs(stateFile, job, extra = []) {
+  return ["prepare-job", "--state-file", relative(stateFile), "--job", job, ...extra];
+}
+
 function firstPhaseId(planPath) {
   const text = readFileSync(planPath, "utf8");
   const match = text.match(/phase-[0-9]{2}-[a-z0-9-]+/);
@@ -313,9 +324,246 @@ function markSpecApproved(paths) {
   writeText(paths.spec, next);
 }
 
+function replaceAllText(text, replacements) {
+  let next = text;
+  for (const [from, to] of replacements) {
+    next = next.replaceAll(from, to);
+  }
+  return next;
+}
+
+function writeExampleArtifact(exampleName, targetPath, replacements = []) {
+  const sourcePath = path.join(exampleDir, exampleName);
+  const text = readFileSync(sourcePath, "utf8");
+  writeText(targetPath, replaceAllText(text, replacements));
+}
+
+function smokeNoteText(workflow, paths, phaseId, dryRun) {
+  return `# Harness Smoke Note
+
+## 目标
+
+- workflow_id: ${workflow}
+- phase_id: ${phaseId}
+- output_note: ${relative(paths.outputNote)}
+
+## 主流程
+
+1. ` + "`init`" + ` 初始化 session state，文件位置是 ` + `\`${relative(paths.stateFile)}\`` + `。
+2. ` + "`state:set`" + ` 写入 ` + "`spec_path`" + ` 和 override 路径。
+3. 用 ` + "`prepare-job`" + ` 为每个 job 生成 prompt，运行目录模式固定为 ` + "`" + `.cc-leader/runs/<workflow-id>/<job-id>/` + "`" + `。
+4. 执行 ` + "`dispatch`" + `；本次 smoke ${dryRun ? "用 dry-run 绕过 codex，直接写固定 artifact 和 result.json。" : "走真实 codex 调用。"}
+5. 查看 run 目录里的 ` + "`result.json`" + `，同时确认 ` + "`prompt.md`" + `、` + "`stdout.jsonl`" + `、` + "`stderr.log`" + ` 存在。
+6. 查看更新后的 session state，重点检查 ` + "`workflow_id`" + `、` + "`current_phase`" + `、` + "`spec_path`" + `、` + "`last_result_file_path`" + `、` + "`final_spec_review_path`" + `、` + "`final_report_path`" + `。
+
+## 可选诊断
+
+- ` + "`resolve-phase`" + ` 可单独用于判断当前 phase。
+
+## 通过判定
+
+- 关键 job 的 ` + "`result.json`" + ` 必须存在。
+- 关键 job 的 ` + "`status`" + ` 必须是 ` + "`done`" + `。
+- verdict 矩阵必须满足：
+  - ` + "`specAdversarialReview`" + ` = ` + "`pass`" + `
+  - ` + "`phasePlanSynthesis`" + ` = ` + "`pass`" + `
+  - ` + "`phaseTaskSynthesis`" + ` = ` + "`pass`" + `
+  - ` + "`phaseExecution`" + ` = ` + "`complete`" + `
+  - ` + "`phaseReview`" + ` = ` + "`pass`" + `
+  - ` + "`finalSpecReview`" + ` = ` + "`pass`" + `
+- ` + "`outputs`" + ` 里声明的 artifact 必须真实存在。
+- 任一步不满足通过矩阵，smoke 立即停止。
+
+## 失败判定
+
+- worker 退出但 ` + "`result.json`" + ` 不存在。
+- 关键 job 的 ` + "`status != done`" + `。
+- 关键 job 的 ` + "`verdict`" + ` 不符合通过矩阵。
+- ` + "`outputs`" + ` 指向的文件不存在。
+
+## 结束要求
+
+- ` + `\`${relative(paths.stateFile)}\`` + ` 中 ` + "`current_phase`" + ` 必须是 ` + "`reporting-results`" + `。
+- ` + "`final_spec_review_path`" + ` 和 ` + "`final_report_path`" + ` 必须已写入。
+- canonical source 优先级：
+  - ` + "`cc-leader.manifest.json`" + `
+  - ` + "`scripts/cc-leader-harness.mjs`" + `
+  - ` + "`docs/runtime-contract.md`" + `
+  - ` + "`docs/harness-example.md`" + `
+`;
+}
+
+function ensureOutputsExist(outputs) {
+  for (const output of outputs) {
+    if (!existsSync(output.path)) {
+      fail(`dry-run 输出不存在: ${output.path}`);
+    }
+  }
+}
+
+function buildDryRunResult(job, workflow, phaseId, verdict, outputs, nextAction, summary) {
+  const now = new Date().toISOString();
+  return {
+    status: "done",
+    job,
+    workflow_id: workflow,
+    phase_id: phaseId,
+    started_at: now,
+    finished_at: now,
+    exit_code: 0,
+    artifact_write_ok: true,
+    retryable: false,
+    verdict,
+    outputs,
+    next_action: nextAction,
+    summary,
+    blockers: [],
+  };
+}
+
+function runDryDispatch(stateFile, job, extra, context) {
+  const prepared = runNode(prepareArgs(stateFile, job, extra));
+  const state = readJson(stateFile);
+  const workflow = state.workflow_id;
+  const phaseId = context.phaseId ?? null;
+  const runDir = abs(prepared.run_dir);
+  const promptFile = abs(prepared.prompt_file);
+  const resultFile = abs(prepared.result_file);
+  const stdoutLog = path.join(runDir, "stdout.jsonl");
+  const stderrLog = path.join(runDir, "stderr.log");
+
+  ensureDir(runDir);
+  if (!existsSync(promptFile)) {
+    fail(`prepare-job 未生成 prompt: ${prepared.prompt_file}`);
+  }
+  writeText(stdoutLog, "");
+  writeText(stderrLog, "");
+
+  let outputs = [];
+  let patch = {
+    active_job_id: null,
+    last_result_file_path: relative(resultFile),
+  };
+  let result = null;
+
+  if (job === "specAdversarialReview") {
+    writeExampleArtifact("spec-review.md", prepared.variables.spec_review_path, [
+      [exampleWorkflowId, workflow],
+      ["docs/examples/minimal-todo/spec.md", relative(context.paths.spec)],
+    ]);
+    outputs = [
+      { artifact: "specReview", path: abs(prepared.variables.spec_review_path) },
+    ];
+    patch = {
+      ...patch,
+      spec_review_path: relative(prepared.variables.spec_review_path),
+      spec_review_passed: true,
+    };
+    result = buildDryRunResult(job, workflow, null, "pass", outputs, "wait_for_user_spec_approval", "dry-run spec review 通过");
+  } else if (job === "phasePlanSynthesis") {
+    writeExampleArtifact("phase-plan-list.md", prepared.variables.phase_plan_list_path, [
+      [exampleWorkflowId, workflow],
+      [examplePhaseId, context.phaseId],
+      ["docs/examples/minimal-todo/spec.md", relative(context.paths.spec)],
+    ]);
+    outputs = [
+      { artifact: "phasePlanList", path: abs(prepared.variables.phase_plan_list_path) },
+    ];
+    patch = {
+      ...patch,
+      phase_plan_list_path: relative(prepared.variables.phase_plan_list_path),
+      phase_plan_review_passed: true,
+    };
+    result = buildDryRunResult(job, workflow, null, "pass", outputs, "dispatch_phase_task_synthesis", "dry-run phase plan 通过");
+  } else if (job === "phaseTaskSynthesis") {
+    writeExampleArtifact("phase-task-list.md", prepared.variables.phase_task_list_path, [
+      [exampleWorkflowId, workflow],
+      [examplePhaseId, context.phaseId],
+      ["docs/examples/minimal-todo/phase-plan-list.md", relative(context.paths.phasePlan)],
+    ]);
+    outputs = [
+      { artifact: "phaseTaskList", path: abs(prepared.variables.phase_task_list_path) },
+    ];
+    patch = {
+      ...patch,
+      phase_task_dir: relative(path.dirname(prepared.variables.phase_task_list_path)),
+      ready_phase_ids: uniq([...(state.ready_phase_ids ?? []), context.phaseId]),
+    };
+    result = buildDryRunResult(job, workflow, phaseId, "pass", outputs, "mark_phase_ready", "dry-run phase task 通过");
+  } else if (job === "phaseExecution") {
+    writeExampleArtifact("phase-result.md", prepared.variables.phase_result_path, [
+      [exampleWorkflowId, workflow],
+      [examplePhaseId, context.phaseId],
+      ["docs/examples/minimal-todo/phase-task-list.md", relative(context.phaseTaskPath)],
+    ]);
+    writeText(context.paths.outputNote, smokeNoteText(workflow, context.paths, context.phaseId, true));
+    outputs = [
+      { artifact: "phaseResult", path: abs(prepared.variables.phase_result_path) },
+      { artifact: "changedArtifact", path: abs(context.paths.outputNote) },
+    ];
+    patch = {
+      ...patch,
+      phase_result_dir: relative(path.dirname(prepared.variables.phase_result_path)),
+      active_phase_id: null,
+      current_execution_root: null,
+      completed_phase_ids: uniq([...(state.completed_phase_ids ?? []), context.phaseId]),
+    };
+    result = buildDryRunResult(job, workflow, phaseId, "complete", outputs, "dispatch_phase_review", "dry-run phase execution 完成");
+  } else if (job === "phaseReview") {
+    writeExampleArtifact("phase-review.md", prepared.variables.phase_review_path, [
+      [exampleWorkflowId, workflow],
+      [examplePhaseId, context.phaseId],
+      ["docs/examples/minimal-todo/phase-plan-list.md", relative(context.paths.phasePlan)],
+      ["docs/examples/minimal-todo/phase-task-list.md", relative(context.phaseTaskPath)],
+      ["docs/examples/minimal-todo/phase-result.md", relative(context.phaseResultPath)],
+    ]);
+    outputs = [
+      { artifact: "phaseReview", path: abs(prepared.variables.phase_review_path) },
+    ];
+    patch = {
+      ...patch,
+      phase_review_dir: relative(path.dirname(prepared.variables.phase_review_path)),
+      reviewed_phase_ids: uniq([...(state.reviewed_phase_ids ?? []), context.phaseId]),
+    };
+    result = buildDryRunResult(job, workflow, phaseId, "pass", outputs, "proceed_to_next_phase", "dry-run phase review 通过");
+  } else if (job === "finalSpecReview") {
+    writeExampleArtifact("final-spec-review.md", prepared.variables.final_spec_review_path, [
+      [exampleWorkflowId, workflow],
+      ["docs/examples/minimal-todo/spec.md", relative(context.paths.spec)],
+      ["docs/examples/minimal-todo/phase-plan-list.md", relative(context.paths.phasePlan)],
+      ["docs/examples/minimal-todo/phase-review.md", relative(context.phaseReviewPath)],
+    ]);
+    outputs = [
+      { artifact: "finalSpecReview", path: abs(prepared.variables.final_spec_review_path) },
+    ];
+    patch = {
+      ...patch,
+      final_spec_review_path: relative(prepared.variables.final_spec_review_path),
+    };
+    result = buildDryRunResult(job, workflow, null, "pass", outputs, "proceed_to_final_report", "dry-run final spec review 通过");
+  } else {
+    fail(`dry-run 不支持的 job: ${job}`);
+  }
+
+  ensureOutputsExist(outputs);
+  writeText(resultFile, `${JSON.stringify(result, null, 2)}\n`);
+  const nextState = runNode(stateSetArgs(stateFile, patch));
+
+  return {
+    exit_code: 0,
+    result,
+    state: nextState,
+    run_dir: relative(runDir),
+    stdout_log: relative(stdoutLog),
+    stderr_log: relative(stderrLog),
+  };
+}
+
 function main() {
+  const dryRun = process.argv.slice(2).includes("--dry-run");
   const workflow = workflowId();
   const paths = buildPaths(workflow);
+  const targetPhaseId = "phase-01-write-smoke-note";
 
   ensureDir(paths.base);
   ensureDir(paths.artifactDir);
@@ -329,10 +577,14 @@ function main() {
     override_log_path: relative(path.join(paths.artifactDir, "override-log.md")),
   }));
 
-  const specReviewRun = runNode(dispatchArgs(paths.stateFile, "specAdversarialReview", [
-    "--spec-review-path", relative(paths.specReview),
-    "--timeout-seconds", "120",
-  ]));
+  const specReviewRun = dryRun
+    ? runDryDispatch(paths.stateFile, "specAdversarialReview", [
+      "--spec-review-path", relative(paths.specReview),
+    ], { paths })
+    : runNode(dispatchArgs(paths.stateFile, "specAdversarialReview", [
+      "--spec-review-path", relative(paths.specReview),
+      "--timeout-seconds", "120",
+    ]));
   if (specReviewRun.result.verdict !== "pass") {
     fail("spec review 未通过", specReviewRun);
   }
@@ -344,10 +596,14 @@ function main() {
     spec_review_path: relative(paths.specReview),
   }));
 
-  const phasePlanRun = runNode(dispatchArgs(paths.stateFile, "phasePlanSynthesis", [
-    "--phase-plan-list-path", relative(paths.phasePlan),
-    "--timeout-seconds", "120",
-  ]));
+  const phasePlanRun = dryRun
+    ? runDryDispatch(paths.stateFile, "phasePlanSynthesis", [
+      "--phase-plan-list-path", relative(paths.phasePlan),
+    ], { paths, phaseId: targetPhaseId })
+    : runNode(dispatchArgs(paths.stateFile, "phasePlanSynthesis", [
+      "--phase-plan-list-path", relative(paths.phasePlan),
+      "--timeout-seconds", "120",
+    ]));
   if (phasePlanRun.result.verdict !== "pass") {
     fail("phase plan 未通过", phasePlanRun);
   }
@@ -362,46 +618,74 @@ function main() {
   const phaseResultPath = paths.phaseResult(phaseId);
   const phaseReviewPath = paths.phaseReview(phaseId);
 
-  const phaseTaskRun = runNode(dispatchArgs(paths.stateFile, "phaseTaskSynthesis", [
-    "--phase-id", phaseId,
-    "--phase-plan-list-path", relative(paths.phasePlan),
-    "--phase-task-list-path", relative(phaseTaskPath),
-    "--timeout-seconds", "120",
-  ]));
+  const phaseTaskRun = dryRun
+    ? runDryDispatch(paths.stateFile, "phaseTaskSynthesis", [
+      "--phase-id", phaseId,
+      "--phase-plan-list-path", relative(paths.phasePlan),
+      "--phase-task-list-path", relative(phaseTaskPath),
+    ], { paths, phaseId, phaseTaskPath, phaseResultPath, phaseReviewPath })
+    : runNode(dispatchArgs(paths.stateFile, "phaseTaskSynthesis", [
+      "--phase-id", phaseId,
+      "--phase-plan-list-path", relative(paths.phasePlan),
+      "--phase-task-list-path", relative(phaseTaskPath),
+      "--timeout-seconds", "120",
+    ]));
   if (phaseTaskRun.result.verdict !== "pass") {
     fail("phase task 未通过", phaseTaskRun);
   }
 
-  const phaseExecRun = runNode(dispatchArgs(paths.stateFile, "phaseExecution", [
-    "--phase-id", phaseId,
-    "--phase-task-list-path", relative(phaseTaskPath),
-    "--phase-result-path", relative(phaseResultPath),
-    "--write-scope", relative(paths.base),
-    "--timeout-seconds", "240",
-  ]));
+  const phaseExecRun = dryRun
+    ? runDryDispatch(paths.stateFile, "phaseExecution", [
+      "--phase-id", phaseId,
+      "--phase-task-list-path", relative(phaseTaskPath),
+      "--phase-result-path", relative(phaseResultPath),
+      "--write-scope", relative(paths.base),
+    ], { paths, phaseId, phaseTaskPath, phaseResultPath, phaseReviewPath })
+    : runNode(dispatchArgs(paths.stateFile, "phaseExecution", [
+      "--phase-id", phaseId,
+      "--phase-task-list-path", relative(phaseTaskPath),
+      "--phase-result-path", relative(phaseResultPath),
+      "--write-scope", relative(paths.base),
+      "--timeout-seconds", "240",
+    ]));
   if (phaseExecRun.result.verdict !== "complete") {
     fail("phase execution 未完成", phaseExecRun);
   }
 
-  const phaseReviewRun = runNode(dispatchArgs(paths.stateFile, "phaseReview", [
-    "--phase-id", phaseId,
-    "--phase-plan-list-path", relative(paths.phasePlan),
-    "--phase-task-list-path", relative(phaseTaskPath),
-    "--phase-result-path", relative(phaseResultPath),
-    "--phase-review-path-output", relative(phaseReviewPath),
-    "--timeout-seconds", "120",
-  ]));
+  const phaseReviewRun = dryRun
+    ? runDryDispatch(paths.stateFile, "phaseReview", [
+      "--phase-id", phaseId,
+      "--phase-plan-list-path", relative(paths.phasePlan),
+      "--phase-task-list-path", relative(phaseTaskPath),
+      "--phase-result-path", relative(phaseResultPath),
+      "--phase-review-path-output", relative(phaseReviewPath),
+    ], { paths, phaseId, phaseTaskPath, phaseResultPath, phaseReviewPath })
+    : runNode(dispatchArgs(paths.stateFile, "phaseReview", [
+      "--phase-id", phaseId,
+      "--phase-plan-list-path", relative(paths.phasePlan),
+      "--phase-task-list-path", relative(phaseTaskPath),
+      "--phase-result-path", relative(phaseResultPath),
+      "--phase-review-path-output", relative(phaseReviewPath),
+      "--timeout-seconds", "120",
+    ]));
   if (phaseReviewRun.result.verdict !== "pass") {
     fail("phase review 未通过", phaseReviewRun);
   }
 
-  const finalSpecReviewRun = runNode(dispatchArgs(paths.stateFile, "finalSpecReview", [
-    "--spec-path", relative(paths.spec),
-    "--phase-plan-list-path", relative(paths.phasePlan),
-    "--phase-review-path", relative(phaseReviewPath),
-    "--final-spec-review-path", relative(paths.finalSpecReview),
-    "--timeout-seconds", "120",
-  ]));
+  const finalSpecReviewRun = dryRun
+    ? runDryDispatch(paths.stateFile, "finalSpecReview", [
+      "--spec-path", relative(paths.spec),
+      "--phase-plan-list-path", relative(paths.phasePlan),
+      "--phase-review-path", relative(phaseReviewPath),
+      "--final-spec-review-path", relative(paths.finalSpecReview),
+    ], { paths, phaseId, phaseTaskPath, phaseResultPath, phaseReviewPath })
+    : runNode(dispatchArgs(paths.stateFile, "finalSpecReview", [
+      "--spec-path", relative(paths.spec),
+      "--phase-plan-list-path", relative(paths.phasePlan),
+      "--phase-review-path", relative(phaseReviewPath),
+      "--final-spec-review-path", relative(paths.finalSpecReview),
+      "--timeout-seconds", "120",
+    ]));
   if (finalSpecReviewRun.result.verdict !== "pass") {
     fail("final spec review 未通过", finalSpecReviewRun);
   }
@@ -410,6 +694,13 @@ function main() {
     final_spec_review_path: relative(paths.finalSpecReview),
   }));
   runNode(["report", "--state-file", relative(paths.stateFile), "--final-report-path", relative(paths.finalReport)]);
+
+  if (!existsSync(paths.outputNote)) {
+    fail(`缺少输出文档: ${relative(paths.outputNote)}`);
+  }
+  if (!existsSync(paths.finalReport)) {
+    fail(`缺少最终报告: ${relative(paths.finalReport)}`);
+  }
 
   const finalState = readJson(paths.stateFile);
   console.log(JSON.stringify({
@@ -424,6 +715,8 @@ function main() {
     final_report: relative(paths.finalReport),
     output_note: relative(paths.outputNote),
     final_phase: finalState.current_phase,
+    dry_run: dryRun,
+    note: dryRun ? "(dry-run: 未调用 codex, 使用固定 artifact)" : undefined,
   }, null, 2));
 }
 
