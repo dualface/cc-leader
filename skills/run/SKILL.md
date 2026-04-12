@@ -1,11 +1,11 @@
 ---
-name: cc-leader:run
-description: "Use when the user wants to execute a cc-leader workflow after spec approval, or says '/cc-leader:run'. Auto-advances through plan, task, execute, review, report."
+name: cc-leader-run
+description: "Use when the user wants to execute a cc-leader workflow after spec approval, or says '/cc-leader-run'. Auto-advances through plan, task, execute, review, report."
 ---
 
 # 启动 Run Workflow
 
-这是 spec 批准后的自动执行入口。用户要继续 workflow，或直接说 `/cc-leader:run` 时，用这个 skill。
+这是 spec 批准后的自动执行入口。用户要继续 workflow，或直接说 `/cc-leader-run` 时，用这个 skill。
 
 ## 核心规则
 
@@ -17,8 +17,8 @@ description: "Use when the user wants to execute a cc-leader workflow after spec
 
 1. 执行 `cc-leader state:get`
 2. 确认 `spec_approved == true`
-3. 如果还没批准，提示用户先用 `/cc-leader:spec`
-4. 同时确认 `spec_review_passed == true`。如果 review 还没通过，也先回 `/cc-leader:spec`
+3. 如果还没批准，提示用户先用 `/cc-leader-spec`
+4. 同时确认 `spec_review_passed == true`。如果 review 还没通过，也先回 `/cc-leader-spec`
 5. 问用户：`业务代码允许写入哪个目录?`
 
 ## 执行
@@ -49,12 +49,12 @@ description: "Use when the user wants to execute a cc-leader workflow after spec
 - 如果 `stopped == true` 且 `reason == "phaseExecution 需要 --write-scope, 需要用户操作"`：
   - 直接向用户追问 write-scope，然后重新运行
 - 如果 `stopped == true` 且 `reason == "spec 未批准, 需要用户操作"`：
-  - 让用户先回 `/cc-leader:spec`
+  - 让用户先回 `/cc-leader-spec`
 - 其他停止原因：
   - 说明 `reason`
   - 给出最小下一步建议
 
 ## 续跑
 
-- workflow 中途停止后，用户补完决策、解除 blocker、或给出 write-scope，即可再次用 `/cc-leader:run`
+- workflow 中途停止后，用户补完决策、解除 blocker、或给出 write-scope，即可再次用 `/cc-leader-run`
 - 再次执行前，先读一次 `cc-leader state:get`，确认当前 phase 和 artifact path

@@ -1,11 +1,11 @@
 ---
-name: cc-leader:spec
-description: "Use when the user wants to start a new cc-leader workflow, write a spec, or says '/cc-leader:spec'. Guides spec drafting and adversarial review."
+name: cc-leader-spec
+description: "Use when the user wants to start a new cc-leader workflow, write a spec, or says '/cc-leader-spec'. Guides spec drafting and adversarial review."
 ---
 
 # 启动 Spec Workflow
 
-这是 `cc-leader` workflow 的用户入口。用户要新开 workflow、写 spec、或直接说 `/cc-leader:spec` 时，用这个 skill。
+这是 `cc-leader` workflow 的用户入口。用户要新开 workflow、写 spec、或直接说 `/cc-leader-spec` 时，用这个 skill。
 
 ## 核心规则
 
@@ -35,7 +35,7 @@ description: "Use when the user wants to start a new cc-leader workflow, write a
    - 向用户总结 review 结论
    - 询问用户是否批准 spec
    - 用户批准后执行 `cc-leader state:set --set spec_approved=true --set spec_review_passed=true`
-   - 明确提示用户：`spec 已批准。用 /cc-leader:run 启动执行。`
+   - 明确提示用户：`spec 已批准。用 /cc-leader-run 启动执行。`
 9. 如果 review 结果是 `revise`：
    - 总结关键问题、隐含假设、建议修改
    - 和用户一起改 spec
