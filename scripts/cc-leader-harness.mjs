@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import {
   existsSync,
   mkdirSync,
@@ -10,9 +11,11 @@ import {
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
+const packRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const root = process.cwd();
-const manifest = JSON.parse(readFileSync(path.join(root, "cc-leader.manifest.json"), "utf8"));
+const manifest = JSON.parse(readFileSync(path.join(packRoot, "cc-leader.manifest.json"), "utf8"));
 const stateFileDefault = path.join(root, ".cc-leader", "session.json");
 
 function printHelp() {
@@ -72,6 +75,10 @@ function repoRel(p) {
 
 function abs(p) {
   return path.isAbsolute(p) ? p : path.join(root, p);
+}
+
+function packAbs(p) {
+  return path.isAbsolute(p) ? p : path.join(packRoot, p);
 }
 
 function ensureDir(dirPath) {
@@ -543,7 +550,7 @@ function buildJobContext(jobName, state, args) {
 }
 
 function renderPrompt(promptPath, variables) {
-  let text = readFileSync(abs(promptPath), "utf8");
+  let text = readFileSync(packAbs(promptPath), "utf8");
   for (const [key, value] of Object.entries(variables)) {
     text = text.replaceAll(`{{${key}}}`, String(value));
   }
