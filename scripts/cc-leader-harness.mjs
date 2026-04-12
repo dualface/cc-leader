@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 const root = process.cwd();
 const manifest = JSON.parse(readFileSync(path.join(root, "cc-leader.manifest.json"), "utf8"));
@@ -647,6 +647,23 @@ async function runCodex(jobContext, promptContent, timeoutSeconds) {
   });
 }
 
+function createRollbackAnchor(jobContext) {
+  const tagName = `pre-${jobContext.jobId}`;
+  const result = spawnSync("git", ["tag", tagName], {
+    cwd: root,
+    encoding: "utf8",
+  });
+
+  if (result.status === 0) return;
+
+  const detail =
+    result.error?.message ||
+    result.stderr?.trim() ||
+    result.stdout?.trim() ||
+    `git tag 退出码 ${result.status ?? "unknown"}`;
+  console.warn(`warn: 创建 rollback tag 失败 (${tagName}): ${detail}`);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0];
@@ -839,6 +856,9 @@ ${phaseLines}
     const currentPrompt = renderPrompt(promptPath, jobContext.variables);
     const recoveryConfig = getRecoveryConfig(jobName, jobContext);
     const beforeSnapshot = recoveryConfig?.path ? captureFileSnapshot(recoveryConfig.path) : null;
+    if (manifest.workerJobs[jobName].writesCode) {
+      createRollbackAnchor(jobContext);
+    }
     run = await runCodex(jobContext, currentPrompt, timeoutSeconds);
 
     if (existsSync(jobContext.resultFile)) {
