@@ -6,13 +6,13 @@
 - reviewer: worker
 - reviewed_spec_path: <path>
 
-## 关键问题
+## 关键问题 (Critical)
 
 - none | <finding list>
 
-## 建议修改
+## 建议改进 (Advisory)
 
-- none | <change list>
+- none | <finding list>
 
 ## 已做假设
 

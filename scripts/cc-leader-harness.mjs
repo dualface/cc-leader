@@ -467,6 +467,7 @@ function buildJobContext(jobName, state, args) {
     Object.assign(derived, {
       spec_path: abs(specPath),
       spec_review_path: abs(specReviewPath),
+      previous_review_path: existsSync(abs(specReviewPath)) ? abs(specReviewPath) : "(无上轮 review)",
     });
   }
 
