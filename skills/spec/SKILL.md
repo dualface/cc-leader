@@ -44,6 +44,10 @@ description: "Use when the user wants to start or continue a cc-leader workflow,
 7. 派 worker 做对抗式 review：`cc-leader dispatch --job specAdversarialReview`
 8. 如果 review 结果是 `pass`：
    - 向用户总结 review 结论
+   - **单独汇报外部依赖风险**: 从 review 文档读取 `external_dependency_risks` 段
+     - 若非 `none`, 逐条朗读给用户, 格式 `<依赖>: <风险> — 建议: <缓解>`
+     - 明确告知用户: "以下风险不阻塞批准, 但建议知情; 最终报告会再次汇总。"
+     - 若为 `none`, 简短告知 "无外部依赖风险记录"
    - 询问用户是否批准 spec
    - 用户批准后执行 `cc-leader state:set --set spec_approved=true --set spec_review_passed=true`
    - 明确提示用户：`spec 已批准。用 /cc-leader-run 启动执行。`
@@ -63,8 +67,10 @@ description: "Use when the user wants to start or continue a cc-leader workflow,
 ## 审查要求
 
 - review 必须是对抗式，不是走过场
-- 重点检查：行为歧义、隐藏依赖、不可测成功标准、缺失失败处理、scope 大到无法 phase 化
+- 重点检查（critical 级）: 行为歧义、隐藏依赖、不可测成功标准（内部）、内部路径失败处理缺失、scope 大到无法 phase 化
+- **外部依赖** (第三方 API / 外部服务) 的错误处理和测试覆盖单独归入 `external_dependency_risks`, 不进 critical, 不触发 revise
 - `开放问题` 不能留空；没有就写 `none`
+- `外部依赖风险` 不能留空；没有就写 `none`
 
 ## 退出条件
 

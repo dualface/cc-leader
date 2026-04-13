@@ -40,14 +40,23 @@
 - verification_sufficient
 - drift_from_phase_goal
 - findings
+- external_dependency_findings（本 phase 外部依赖问题汇总，含建议），或 `none`
 - next action
 
 ## 审查重点
 
 - deliverables 是否存在
-- `verification_run` 是否真的支撑功能完成
+- `verification_run` 是否真的支撑功能完成（**仅内部逻辑部分**）
 - `scope_verification` 是否真的支撑“业务改动未越出 write scope”
 - summary 不能声称超过证据本身
+- 把 phase result 中的 `external_dependency_notes` / `external_dependency_summary` 汇聚进 `external_dependency_findings`
+
+## 外部依赖判定规则
+
+- 仅因第三方 API / 外部服务不可达、超时、限流、鉴权失败而导致的 verification 缺失，**不**视为 `verification_sufficient: no`
+- 这类缺口记入 `external_dependency_findings`，不触发 `fail`
+- 如果 deliverable 的**内部逻辑**可独立验证且已验证通过，即认定交付达标
+- 只有当内部逻辑验证也不充分时，才标 `fail`
 
 ## Scope 判定规则
 

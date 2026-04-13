@@ -17,6 +17,7 @@ description: 当所有 phase 和 review 都通过后使用。此时由 cc 基于
 - 报告必须基于 artifact，不基于记忆
 - final report 要反链回 spec、plans、results、reviews
 - 详细写清：做了什么、怎么验证、还剩什么风险
+- **必须单独设 `外部依赖问题与建议` 段**, 汇总全流程识别到的第三方 API / 外部服务问题与缓解建议
 
 ## 流程
 
@@ -33,9 +34,11 @@ description: 当所有 phase 和 review 都通过后使用。此时由 cc 基于
    - verification evidence
    - review findings 及处理方式
    - remaining risks 或 follow-ups
+   - **external_dependency_issues_and_recommendations**: 汇总去重全流程外部依赖问题, 按依赖名分组, 每条给出建议
    - 是否满足 spec 的明确结论
 3. 报告落盘
 4. 给用户展示报告，并附关键 artifact 链接
+5. 在终端明确朗读 `外部依赖问题与建议` 段, 让用户知情; 若为 `none` 也要说明
 
 ## 退出条件
 
@@ -49,3 +52,5 @@ description: 当所有 phase 和 review 都通过后使用。此时由 cc 基于
 - 模糊 “done” 报告，没证据
 - 漏写未解风险
 - 不引用 final spec review 就宣称完成
+- 把外部依赖问题混进 "剩余风险" 而不单列汇总
+- 外部依赖段缺建议 (只列问题不给出缓解方式)

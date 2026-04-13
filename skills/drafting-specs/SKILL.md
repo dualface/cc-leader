@@ -29,14 +29,16 @@ description: 当 cc 需要和用户一起产出已批准 spec，并在进入 pla
 5. 要求 worker 重点找：
    - 行为歧义
    - 隐藏依赖
-   - 不可测 acceptance criteria
-   - 缺 failure handling
+   - 不可测 acceptance criteria（仅内部行为）
+   - 缺 failure handling（仅内部路径）
    - scope 大到无法 phase 化
-6. 如果 worker 找到关键问题：
+   - 单独列出 `external_dependency_risks`：第三方 API / 外部服务的错误处理与测试缺口。此类**不**作为 critical，不触发 revise
+6. 如果 worker 找到关键问题（critical）：
    - 向用户总结问题
    - 和用户一起改 spec
    - 再跑一次对抗式 review
 7. 如果 worker 通过，或用户 override 剩余问题：
+   - **在请求用户批准前，必须单独朗读 `external_dependency_risks` 清单**（如有），让用户知情
    - 把当前 spec 交给用户审批
 8. 明确批准前，停在这里。批准后才进 `writing-phase-plans`
 
@@ -49,6 +51,7 @@ description: 当 cc 需要和用户一起产出已批准 spec，并在进入 pla
 - architecture 和边界
 - phase assumptions
 - testing 和 verification 预期
+- external_dependency_risks（第三方依赖相关风险），或明确写 `none`
 - open questions，或明确写 `none`
 - review history
 - approval status
@@ -59,6 +62,8 @@ description: 当 cc 需要和用户一起产出已批准 spec，并在进入 pla
 
 - verdict: `pass` 或 `revise`
 - critical findings
+- advisory findings
+- external_dependency_risks
 - suggested changes
 - assumptions the worker had to make
 

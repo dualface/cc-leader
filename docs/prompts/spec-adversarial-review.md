@@ -30,22 +30,41 @@
 
 - 行为歧义
 - 隐藏依赖
-- failure handling 缺失
-- success criteria 不可测
+- failure handling 缺失（**仅内部路径**，见下方外部依赖规则）
+- success criteria 不可测（**仅内部逻辑**，见下方外部依赖规则）
 - scope 太大或太虚，无法按 phase 执行
 
 ## 严重度分级
 
+共三类：`critical`、`advisory`、`external_dependency_risks`。外部依赖类问题**永不进 critical**，也不触发 revise。
+
 - critical: 会导致 spec 无法执行，或执行结果不可控。只有 critical 触发 revise
-  - 成功标准不可观测/不可测
+  - 成功标准不可观测/不可测（仅指内部行为本身不可测；因外部 API 不可达导致的不可测归 `external_dependency_risks`）
   - 关键行为歧义（同一句话可以理解为两种相反行为）
   - 明确的循环依赖或死锁 scope
-  - 缺失核心 failure handling，导致无法安全回滚
+  - 缺失核心 failure handling，**且该失败路径完全由内部逻辑控制**
 - advisory: 可改善但不阻塞执行。不触发 revise
   - 措辞不够精确但意思可理解
   - 可选优化建议
   - 可补但已有 workaround 的边界条件
-  - 非核心路径的 failure handling
+  - 非核心路径的 failure handling（内部）
+- external_dependency_risks: 涉及第三方 API / 外部服务 / 网络依赖的错误处理或测试覆盖问题。**一律记录不阻塞，不触发 revise**
+  - 第三方 API 超时 / 限流 / 返回异常 / 鉴权失效的处理缺失
+  - 外部服务降级 / 重试 / 熔断策略未定义
+  - 需要真实调用外部 API 才能覆盖的测试路径
+  - mock / stub / contract test 缺失导致 CI 无法在离线环境验证
+  - 外部依赖版本 / schema 变更敏感性未说明
+
+## 外部依赖判定
+
+以下之一即视为外部依赖：
+
+- 调用非本 repo 控制的 HTTP / RPC / gRPC 服务
+- 依赖外部账号、token、凭证才能工作
+- 依赖公网连通性
+- 依赖第三方 SaaS（支付、邮件、AI 推理、地图、推送等）
+
+内部依赖（本 repo、本项目数据库、本地文件、同一服务内其他模块）**不**适用此规则。
 
 ## 必做步骤
 
@@ -61,6 +80,7 @@
 - verdict: `pass` | `revise`
 - critical_findings: <list> 或 `none`
 - advisory_findings: <list> 或 `none`
+- external_dependency_risks: <list> 或 `none`（每条含：依赖名、风险点、建议缓解方式）
 - assumptions made，或 `none`
 - recommended next action
 
@@ -84,9 +104,10 @@
 verdict 判定：
 - 有 critical finding → `revise`
 - 只有 advisory finding → `pass`
+- 只有 external_dependency_risks → `pass`
 - 无 finding → `pass`
 
-能给出 `revise` 时，不要返回 `blocked`。但只有 critical finding 才给 `revise`，advisory 不触发 `revise`。
+能给出 `revise` 时，不要返回 `blocked`。只有 critical finding 才给 `revise`，advisory 和 external_dependency_risks 都**不**触发 `revise`。
 
 ## 输出要求
 

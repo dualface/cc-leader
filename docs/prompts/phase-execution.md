@@ -43,6 +43,7 @@
 - changed files 或 artifacts
 - verification run
 - scope_verification
+- external_dependency_notes（本 task 涉及的外部依赖调用失败/跳过/降级记录，无则 `none`）
 - follow_up_notes
 
 ## 边界校验要求
@@ -86,7 +87,20 @@ diff -u "$(dirname "{{result_file_path}}")/before.sha" "$(dirname "{{result_file
 - task list 缺失
 - task list 自相矛盾
 - 需要写 scope 外的业务文件
-- 同一 verification 连续失败
+- 同一 verification 连续失败（**仅限内部逻辑验证**；见下方外部依赖规则）
+
+## 外部依赖失败处理规则
+
+外部依赖 = 第三方 API / 外部服务 / 网络可达性 / 外部 token 鉴权 / 第三方 SaaS。
+
+当 verification 或 task 执行因**外部依赖不可达 / 超时 / 限流 / 鉴权失败**受阻时：
+
+- **不**返回 `blocked`
+- **不**视为该 task 失败
+- 把这次失败记到当前 task 的 `external_dependency_notes`，格式：`<依赖名>: <失败原因> — 影响: <哪些路径未覆盖>`
+- 如果同一 task 有内部逻辑部分可验证，把内部部分照常验证
+- 若整个 task 只能靠外部依赖验证，则 task status 标 `complete`，但在 `external_dependency_notes` 里写明 "未经实际调用验证，原因: <...>"
+- 在 phase 摘要的 `external_dependency_summary` 字段累积汇总（见下）
 
 ## 输出要求
 

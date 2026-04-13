@@ -21,6 +21,14 @@
 
 - none | <finding list>
 
+## 外部依赖发现
+
+> 第三方 API / 外部服务 / 网络依赖相关的验证缺口与问题。
+> 此类不触发 fail, 仅累积至最终报告。
+> 每条格式: `<依赖名>: <问题> — 建议: <缓解方式>`
+
+- none | <finding list>
+
 ## 必须跟进项
 
 - none | <follow-up list>
