@@ -94,6 +94,13 @@ override 后必须做：
 - result file `status = blocked`：看 `retryable`
 - result file `status = done` 但 artifact 无效：按 failed artifact 处理，不算成功
 
+如果 `active_job_id` 仍存在：
+
+- 不要先假定要重派新 job
+- 先检查对应 run 目录里的 `job.json`
+- 如果 runner / worker 仍存活，应先接管等待
+- 如果 worker 已退出，再按 `result.json` 或 artifact recovery 继续状态推进
+
 ## 用户升级条件
 
 出现下列任一情况，`cc` 应问用户：

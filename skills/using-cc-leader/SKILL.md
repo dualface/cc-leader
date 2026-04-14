@@ -65,12 +65,27 @@ cc-leader run --write-scope <allowed-write-path>
 
 这会自动推进: plan -> task -> execute -> review -> report, 直到完成或需要用户介入。
 
+如果 `cc` 自己中途断线、报错、额度耗尽：
+
+- 直接再次执行 `cc-leader run --write-scope <allowed-write-path>`
+- harness 会先检查 `active_job_id`
+- 如果后台 worker 还活着，就接管等待
+- 如果后台 worker 已结束，就读取结果或做 artifact recovery
+
 ### 查看状态
 
 ```bash
 cc-leader state:get
 cc-leader resolve-phase
+cc-leader job:status
+cc-leader job:status --job-id <job-id>
 ```
+
+用途：
+
+- `state:get`：看 workflow state 真源
+- `resolve-phase`：看当前 phase 推断结果
+- `job:status`：看 active job 或指定 job 的 detached runner / worker / result 状态
 
 ### 手动 dispatch (高级)
 

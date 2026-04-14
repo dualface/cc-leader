@@ -14,8 +14,9 @@
 - planning/tasking 可按 phase 并发
 - 执行按依赖串行
 - review gate 决定前进还是回退
-- transport 固定为：非交互 `codex-cli` + 结果文件回传
+- transport 固定为：detached runner + 非交互 `codex-cli` + 结果文件回传
 - 目录按写入时创建，不要求仓库预置空目录
+- `cc` 自身中断不应直接杀掉 worker；恢复时先接管 active job
 
 ## 参考合同
 
@@ -204,3 +205,10 @@ worker 走不下去时，应写：
 - 回退到最小受影响 phase
 - 问用户
 - 记录 override
+
+如果只是想观察后台 job，而不是推进 workflow：
+
+- 读 `job.json`
+- 看 runner / worker pid 是否存活
+- 看 `result.json` 是否已就绪
+- 可通过 `cc-leader job:status` 暴露这类观察能力

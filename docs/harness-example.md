@@ -9,9 +9,10 @@
 1. 读 manifest
 2. 决定当前 phase
 3. 渲染 worker prompt
-4. 调 `codex exec`
-5. 读结果文件
-6. 更新 session state
+4. 启动 detached runner
+5. 由 detached runner 调 `codex exec`
+6. 读结果文件
+7. 更新 session state
 
 仓库里已有最小脚本：
 
@@ -27,6 +28,7 @@ npm run harness -- init --slug todo-cli
 npm run harness -- state:get
 npm run harness -- resolve-phase
 npm run harness -- job:status
+npm run harness -- job:status --job-id <job-id>
 npm run harness -- prepare-job --job specAdversarialReview
 npm run harness -- dispatch --job specAdversarialReview --timeout-seconds 120
 npm run harness -- report --final-report-path docs/reports/example.md
@@ -97,6 +99,7 @@ saveState(state);
 - 不要从 stdout 抓业务状态
 - 只认 `result.json`
 - `job.json` 只用来做 detached runner 恢复，不是真源
+- `job:status` 只做观察，不推进 state
 - 每次重试都用新 `job_id`
 - 写 artifact 前先 `mkdir -p`
 - code-changing phase 开始前打 rollback anchor

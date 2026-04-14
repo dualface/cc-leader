@@ -106,6 +106,23 @@ manifest 里的 `workerJobs` 定义 job 类别：
 
 harness 应读取 prompt 模板，替换全部必需变量，再 dispatch。
 
+### 4.1 支持 job 状态观察
+
+harness 还应让 `cc` 能观察 active job 或指定 job 的后台状态。
+
+最少要求：
+
+- 能根据 `active_job_id` 找到对应 run 目录
+- 能读取 `.cc-leader/runs/<workflow-id>/<job-id>/job.json`
+- 能判断 detached runner / worker 是否仍存活
+- 能报告 `result.json` 是否已就绪
+- 能在需要时回退到 `last_result_file_path` 推断最近 job
+
+建议暴露命令：
+
+- `cc-leader job:status`
+- `cc-leader job:status --job-id <job-id>`
+
 ### 5. 遵守 transport/runtime
 
 当前固定为：
@@ -114,6 +131,7 @@ harness 应读取 prompt 模板，替换全部必需变量，再 dispatch。
 - `cc-leader` 用 detached runner 非交互调用 `codex exec`
 - worker 把结果写到 `result_file_path`
 - `cc` 自身中断后，再次 run 要能接管 active job
+- harness 应支持单独查询 active job 状态，不强制 rerun 才能观察
 - 运行时文件放在 `.cc-leader/runs/`
 
 细节看：
