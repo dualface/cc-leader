@@ -23,6 +23,8 @@ cd cc-leader
 脚本会：
 
 - 把 `skills/*` 复制到 `~/.claude/skills/cc-leader--<name>`
+  - 已有目录会被覆盖同步
+  - 旧的 symlink 也会先清理，再替换成真实目录
 - 在 `~/.local/bin/cc-leader` 写 wrapper（需要 `~/.local/bin` 在 `PATH`）
 - 跑 `npm run validate` 自检
 
@@ -35,7 +37,11 @@ cd cc-leader
 ./scripts/install.sh --update
 ```
 
-`--update` 会先执行 `git pull`，再重跑安装逻辑（幂等，新增 skill 自动注册，wrapper 有变更时自动更新）。
+`--update` 会先执行 `git pull`，再重跑安装逻辑：
+
+- 所有 skill 都会重新同步到 `~/.claude/skills/cc-leader--<name>`
+- 旧 symlink 会被替换成真实目录
+- wrapper 有变更时自动重写
 
 ### 在目标项目中使用
 
