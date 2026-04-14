@@ -22,7 +22,7 @@ cd cc-leader
 
 脚本会：
 
-- 把 `skills/*` 软链到 `~/.claude/skills/cc-leader--<name>`
+- 把 `skills/*` 复制到 `~/.claude/skills/cc-leader--<name>`
 - 在 `~/.local/bin/cc-leader` 写 wrapper（需要 `~/.local/bin` 在 `PATH`）
 - 跑 `npm run validate` 自检
 
@@ -138,7 +138,7 @@ cc-leader run   # spec 批准后一键推进到终态或用户介入点
 - 状态机、重试策略、override、verification 规则
 - slash command 入口（`/cc-leader-spec`、`/cc-leader-run`）
 - 最小 harness：`init` / `state:get` / `state:set` / `dispatch` / `job:status` / `run` / `resolve-phase` / `report`
-- 全局安装脚本（wrapper + skill symlink）
+- 全局安装脚本（wrapper + skill copy）
 - 外部依赖风险独立分类（不阻塞、全程记录、最终汇总）
 - spec 续接、模型切换、revise 强制介入、rollback anchor、state schema 校验
 - 样例 artifact（`docs/examples/minimal-todo/`）

@@ -24,33 +24,24 @@ ensure_dir() {
   fi
 }
 
-ensure_skill_link() {
+install_skill_copy() {
   local skill_dir="$1"
   local skill_name
   local source_path
   local target_path
-  local current_path
 
   skill_name="$(basename "$skill_dir")"
   source_path="$(cd -- "$skill_dir" && pwd -P)"
   target_path="${CLAUDE_SKILLS_DIR}/cc-leader--${skill_name}"
 
-  if [[ -L "$target_path" ]]; then
-    current_path="$(cd -- "$target_path" && pwd -P)"
-    if [[ "$current_path" == "$source_path" ]]; then
-      log "skill 已存在, 跳过: cc-leader--${skill_name}"
-      return
-    fi
+  if [[ -e "$target_path" || -L "$target_path" ]]; then
     rm -rf "$target_path"
-    log "skill 链接已修正: cc-leader--${skill_name}"
-  elif [[ -e "$target_path" ]]; then
-    rm -rf "$target_path"
-    log "skill 目标已重建: cc-leader--${skill_name}"
+    cp -R "$source_path" "$target_path"
+    log "skill 已更新: cc-leader--${skill_name}"
   else
-    log "skill 已注册: cc-leader--${skill_name}"
+    cp -R "$source_path" "$target_path"
+    log "skill 已安装: cc-leader--${skill_name}"
   fi
-
-  ln -s "$source_path" "$target_path"
 }
 
 ensure_wrapper() {
@@ -125,7 +116,7 @@ main() {
   shopt -s nullglob
   for skill_dir in "$SKILLS_SOURCE_DIR"/*; do
     [[ -d "$skill_dir" ]] || continue
-    ensure_skill_link "$skill_dir"
+    install_skill_copy "$skill_dir"
     skill_count=$((skill_count + 1))
   done
   shopt -u nullglob
@@ -146,7 +137,7 @@ main() {
 
   cat <<EOF
 安装完成
-- 已注册 skill: ${skill_count} 个
+- 已同步 skill: ${skill_count} 个
 - wrapper 路径: ${WRAPPER_PATH}
 - 使用方式:
   cd <目标项目根目录>
@@ -156,4 +147,3 @@ EOF
 }
 
 main "$@"
-
