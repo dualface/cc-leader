@@ -42,8 +42,8 @@ codex exec --json --dangerously-bypass-approvals-and-sandbox "$PROMPT_CONTENT"
 
 ## 时间限制
 
-- 默认 job: 600 秒
-- `phaseExecution`: 1800 秒
+- 默认 job: 3600 秒
+- `phaseExecution`: 3600 秒
 - review 类 job: 900 秒
 
 超时后：

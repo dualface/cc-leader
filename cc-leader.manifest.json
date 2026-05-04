@@ -186,8 +186,8 @@
     },
     "mode": "non_interactive",
     "timeoutSeconds": {
-      "default": 600,
-      "phaseExecution": 1800,
+      "default": 3600,
+      "phaseExecution": 3600,
       "review": 900
     },
     "resultFileContractPath": "docs/transport-contract.md",
@@ -283,7 +283,7 @@
     "phaseExecution": {
       "phase": "executing-phase-tasks",
       "parallelism": "single_active_phase",
-      "timeoutSeconds": 1800,
+      "timeoutSeconds": 3600,
       "writesCode": true,
       "inputs": [
         "phaseTaskList"
