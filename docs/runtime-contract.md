@@ -42,9 +42,22 @@ codex exec --json --dangerously-bypass-approvals-and-sandbox "$PROMPT_CONTENT"
 
 ## 时间限制
 
-- 默认 job: 3600 秒
-- `phaseExecution`: 3600 秒
-- review 类 job: 900 秒
+每个 worker job 在 `manifest.workerJobs.<job>.timeoutSeconds` 单独配置：
+
+| Job                     | 超时 (秒) |
+| ----------------------- | --------- |
+| `specAdversarialReview` | 600       |
+| `phasePlanSynthesis`    | 600       |
+| `phaseTaskSynthesis`    | 600       |
+| `phaseExecution`        | 3600      |
+| `phaseReview`           | 900       |
+| `finalSpecReview`       | 900       |
+
+`drive` 模式默认走 `manifest.transport.timeoutSeconds.default`（3600 秒），可用
+`cc-leader drive --timeout-seconds <n>` 覆盖。
+
+`manifest.transport.timeoutSeconds.{phaseExecution,review}` 字段不被代码读取，
+仅作参考；真值以 `workerJobs.<job>.timeoutSeconds` 为准。
 
 超时后：
 
