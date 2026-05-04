@@ -326,9 +326,11 @@ function extractSection(filePath, heading) {
 
 function readStatusFromMarkdown(filePath) {
   if (!filePath || !fileExists(filePath)) return null;
-  const text = readFileSync(abs(filePath), "utf8");
-  const statusLine = text.match(/^- status: ([a-z_]+)$/m);
-  return statusLine?.[1] ?? null;
+  const raw = readMarkdownField(filePath, "status");
+  if (!raw) return null;
+  const value = raw.replace(/^["']|["']$/g, "").trim().toLowerCase();
+  if (!value || value.includes("|")) return null;
+  return value;
 }
 
 function resolvePhase(state) {
