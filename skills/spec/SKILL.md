@@ -16,7 +16,7 @@ description: "Use when the user wants to start or continue a cc-leader workflow,
 
 ## 流程
 
-0. 建议用户切换模型: "建议切换到 Opus 4.6 (1M context) 模型以获得最佳 spec 质量。可用 /model 切换。"
+0. 建议用户切换模型: "建议切换到 Opus 4.7 (1M context) 模型以获得最佳 spec 质量。可用 /model 切换。"
 1. 确认当前就是目标项目根目录，先执行 `pwd`
 2. 检测已有 workflow: 执行 `cc-leader state:get`
    - 如果已有 workflow 且 `spec_approved == true`:
