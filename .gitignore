@@ -1,6 +1,7 @@
 .DS_Store
 .cc-leader/
 .memsearch/
+worktrees/
 node_modules/
 dist/
 .idea/
