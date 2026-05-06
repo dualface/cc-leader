@@ -33,10 +33,11 @@ description: "Use when the user explicitly asks to start a cc-leader workflow, r
 cc-leader workflow 的所有写动作 (spec / plan / task / execute / review / report) 必须在 git worktree 中进行，禁止直接污染主工作树。
 
 - 路径约定：worktree 放在**项目根目录**的 `worktrees/` 子目录下，路径形如 `worktrees/<worktree-name>`
-- worktree 命名按"任务簇"取名 (例如 `worktrees/auth-overhaul`、`worktrees/billing-q2`)，**不**绑死单个 workflow slug
-- **一个 worktree 可承载多个 spec / workflow**：复杂任务常拆成多个 spec 串/并行推进，它们应共用同一 worktree，避免分支爆炸和反复 rebase
-  - 多个 workflow 在同一 worktree 内时，每个 workflow 仍用独立 `workflow_id` 与独立 `.cc-leader/` 子目录，互不污染 state
-  - 默认串行推进；若用户明确要并行，需为并行的 workflow 各自划分写入路径，避免 phaseExecution 互相覆盖
+- 命名按"任务簇"取名 (例如 `worktrees/auth-overhaul`、`worktrees/billing-q2`)，**不**绑死单个 workflow slug
+- **同一 worktree 串行承载多个 spec / workflow**：复杂任务拆成多个 spec 时，在同一 worktree 内串行推进 — 上一个 workflow 完成 (final report 出 / STATUS=done) 后再起下一个
+  - CLI 限制：单 repo 同时只活跃**一个** workflow (`.cc-leader/session.json` 单状态)
+  - 切换到下一 spec：先 `cc-leader state:get` 确认当前 workflow 已 done，再 `cc-leader init --slug <new-slug> --force` 起新 workflow
+  - 真要并行多 workflow：各自一个 worktree (一 worktree 一活跃 workflow)
 - 同一 workflow 的所有阶段始终共用同一个 worktree，从 spec 起一直用到 report；不要中途切到别的 worktree
 - 进入任何 phase skill 前先检查 `pwd`：
   - 若已在某 `<project-root>/worktrees/<name>` 内 → 继续在该 worktree 工作
@@ -48,121 +49,105 @@ cc-leader workflow 的所有写动作 (spec / plan / task / execute / review / r
 
 ### 后台任务看护规则
 
-可主动通知 cc 的后台任务 (本 session 内 `Bash run_in_background` / `Agent run_in_background` / `cc-leader dispatch` 派的 worker) 默认依赖完成时的 `<task-notification>` 推送，但仍需防卡死兜底：
+可主动通知 cc 的后台任务 (本 session 内 `Bash run_in_background` / `Agent run_in_background` / `cc-leader dispatch` 派的 worker) 默认依赖完成时的 `<task-notification>` 推送；正常路径无需主动轮询。
 
-- 派出后立即用 `ScheduleWakeup` 排看护回调，`prompt` 写明回头检查哪个 job (例如 `<<autonomous-loop-dynamic>>` 或具体 `cc-leader job:status --job-id <id>` 的提示)
-- 间隔按任务长度选，**避开 600s** (付 cache miss 又拿不到长间隔好处)：
+防卡死兜底 (可选, 长跑 phaseExecution 等场景建议开)：
+
+- 派完 worker 后用 `CronCreate(recurring=false, durable=false)` 排一次性看护回调
+  - cron 表达式按当前 local time 推 +N 分钟 (5 字段格式 `M H DoM Mon *`)
+  - prompt 写明检查指令，例如 `检查 cc-leader job:status --job-id <id>，若 running 且有进展则再排一次 wakeup`
+  - `CronCreate` 返回 job ID；收到自然 `<task-notification>` 后用 `CronDelete <id>` 撤回
+- 间隔按任务长度选，**避开 ~600s** (付 cache miss 又拿不到长间隔好处)：
   - 长任务 (>30min)：1500–1800s，摊薄 cache miss
   - 活跃监控 (即将完成 / 卡边缘)：≤270s，留在 5min cache 内
 - 回调触发时只做轻量检查：
   - 跑 `cc-leader job:status --job-id <id>` 或读 `last_result_file_path`
-  - 若 worker 仍 running 且有进展 → 再排一次 wakeup
-  - 若 worker 仍 running 但日志/输出无变化 (疑似卡死) → 提示用户并问是否 stop / restart
-  - 若已完成 → 进入正常结果处理
-- 收到自然 `<task-notification>` 后，撤掉对应 wakeup (`CronDelete`) 避免重复
+  - 仍 running 且有进展 → 再排一次 cron 看护
+  - 仍 running 但日志 / 输出无变化 (疑似卡死) → 提示用户并问是否 stop / restart
+  - 已完成 → 进入正常结果处理
 - 不可主动通知的任务 (`cc-leader drive` 等跨 session detached) 不适用本节，按 `drive` skill 规则单独处理
 
-### 看护期 token 节流规则
+### Token 节流规则
 
-cc 自身上下文窗口宝贵，codex worker 用量无限。看护期所有重活儿 push 给 codex worker，cc 只做调度与摘要消费。
+总原则：cc 只读结构化字段 / 摘要 / diff，**不**读原始大文件。
 
-#### 重活儿派给 codex (优先)
+> **CLI 现状**：当前 `cc-leader.manifest.json` 只有 6 个固定 worker job (`specAdversarialReview` / `phasePlanSynthesis` / `phaseTaskSynthesis` / `phaseExecution` / `phaseReview` / `finalSpecReview`)，**没有**通用 codex 摘要 / finalReport / recovery job。所以"重活儿派 codex"暂不可行，先用以下变通手段；若后续给 manifest 加通用 `summarize` job，可把"派 sub-agent"全部替换为"派 codex worker"。
 
-下列动作**禁止**在 cc session 里直接做，全部 `cc-leader dispatch` 一个轻量 codex worker 处理，cc 只读最终摘要文件：
+可用减负手段优先级：
 
-- 解析 / 总结超过 200 行的 worker 日志或 phase 输出
-- 跨多个 phase artifact 做对比 / 一致性检查
-- 读大型 state 文件后再做语义判断 (例如卡死原因诊断)
-- 任何"读一堆文件再写报告"模式
+1. **结构化字段提取** (最省)：`cc-leader state:get`、`jq` 抽 result.json 字段、`grep -A N <heading>` 抽段
+2. **Bash 限幅**：`head` / `tail` / `wc -l` / `grep -c`，禁全文 `Read` / `cat`
+3. **Agent sub-agent** (兜底)：必要时用 `Agent (Explore / general-purpose)`，子 agent context 烧在子 session，主 cc 只收 ≤200 字摘要 — 注意 sub-agent **仍烧用户配额**，比假想中的 codex worker 贵，仅在前两条不够时用
 
-派 codex 时 prompt 明确要求："只输出 JSON 摘要 / ≤200 字结论到 `<out>`，不要把原文回放进 stdout。"
+#### 看护期 (后台 worker 仍在跑)
 
-#### cc 直接做的事 (轻量)
-
-- `cc-leader job:status --job-id <id>` 读结构化 JSON
-- 读单个小 state 字段 (`last_result_file_path` / `active_job_id` / `current_phase`)
-- 比对 mtime / 行数 / 简单 grep (`tail -50 | grep -E 'ERROR|FAIL|done'`)
-- 把 codex 写好的摘要文件 `Read` 进来转述
-
-#### 增量原则
-
-- 记上次 `last_progress_at` / 结果文件 mtime / 行数到对话文本中；下次回调先比对，没变化就跳过深度检查
-- 多 job 共一次 wakeup 批量查，别 1 job 1 wakeup
-- 给用户的状态汇报压成一行：`<job-id>: running, N task done, last_progress Xmin ago`
-
-#### 模型档位
-
-看护期不需要 Opus。`run` skill 已默认 `/model sonnet medium`；只做 status 轮询时可降到 haiku 进一步省 token。
-
-### 全工作流 token 节流规则
-
-总原则：**重活儿 → codex worker；cc → 只读摘要 / 结构化字段 / diff**。下列每一条都是硬规矩，违反就是浪费用户配额。
+- ❌ 不直接 `Read` >200 行的 worker 日志 / phase 输出
+- ✅ `cc-leader job:status --job-id <id>` 看 JSON
+- ✅ `tail -50 <log> | grep -E 'ERROR|FAIL|done'` 抽关键行
+- ✅ 比对 mtime / 行数；无变化跳过深查
+- 多 job 共一次 cron 看护批量查，别 1 job 1 wakeup
+- 模型档位：`run` skill 已默认 `/model sonnet medium`；纯 status 轮询用 haiku
 
 #### 最终报告生成 (`reporting-results`)
 
-- ❌ 不在 cc 里读 spec + 全部 phase result + 全部 review 后写报告
-- ✅ 派 codex worker (例如 `cc-leader dispatch --job phaseReview`-类似入口或专用 finalReport job) 读全链 artifact 并写到 `state.final_report_path`
-- cc 只 `Read` 最终报告文件给用户，原始 artifact 一律不读
+- cc 仍是写报告主体 (CLI 没 finalReport job)，但读 artifact 时**分段读，不全读**：
+  - `head -100 <spec>` 读目标 / 非目标段
+  - `grep -A 10 '## verdict\|## blockers' <phaseReview>` 抽 verdict / blockers
+  - 完整 `Read` 只对 final report template 用一次
+- 跨 phase 合成时优先派 `Agent (general-purpose)` sub-agent：prompt 给 artifact 路径列表 + 要求 ≤500 字 phase 摘要 + 风险列表，主 cc 收摘要写最终报告
 
 #### plan / task 文档回读
 
 - worker 出完 plan list / task list 后，cc 不读全文
-- 默认动作：`head -50 <file>` + 统计 phase 数 / task 数 (用 `grep -c` 之类) → 一句话告诉用户
-- 用户问到具体 phase 才派 codex 摘要那一段，或精读单 phase 子文件
+- 默认：`head -50 <file>` + `grep -c '^### phase' <file>` 算 phase 数 → 一句话告诉用户
+- 用户问到具体 phase 才精读那一段
 
 #### phase review 回读
 
-- 只解析三段：`verdict`、`blockers`、`top_issues` (前 3 条)
-- 完整 review markdown 不读；用户要细节时派 codex 摘要
+- 只用 `grep -A` 抽三段：`verdict` / `blockers` / `top_issues` (前 3 条)
+- 完整 review markdown 不读
 
 #### spec 对抗审 revise 循环
 
 - 每轮 revise 不把 spec 全文 + review 全文带进 cc context
-- spec 改动用 `git diff` 给 cc，原文留在文件系统
-- review 结果只看 verdict + critical issues 列表，全文派 codex 摘要
+- spec 改动用 `git diff <spec_path>` 给 cc，原文留在文件系统
+- review 结果只看 verdict + critical issues，用 `grep -A` 抽
 
 #### Bash 输出强制限幅
 
-| 命令              | 默认形式                                       |
-| ----------------- | ---------------------------------------------- |
-| `git log`         | `git log -n 10 --oneline`                      |
-| `git diff`        | `git diff --stat`，要全文派 codex              |
-| `git status`      | 默认即可，**禁** `-uall`                       |
-| `find`            | 必须 `\| head -50`                             |
-| `grep`            | 必须 `\| head -50` 或 `-c` 计数                |
-| `ls`              | 子目录深时用 `-1 \| head`                      |
-| `cat` / `tail -f` | **禁**直接对大文件用；改 `tail -50` 或派 codex |
+| 命令              | 默认形式                                     |
+| ----------------- | -------------------------------------------- |
+| `git log`         | `git log -n 10 --oneline`                    |
+| `git diff`        | `git diff --stat`，要全文派 sub-agent 摘要   |
+| `find`            | 必须 `\| head -50`                           |
+| `grep`            | 必须 `\| head -50` 或 `-c` 计数              |
+| `ls`              | 子目录深时用 `-1 \| head`                    |
+| `cat` / `tail -f` | **禁**直接对大文件用；改 `tail -50` 或抽段读 |
 
-要全文分析的：写 codex worker，让 codex 读完出摘要文件，cc 只读摘要。
+要全文分析的：派 sub-agent，主 cc 只读摘要。
 
 #### artifact recovery
 
-- 断线 / 续跑时，禁止 cc 自己重读所有 artifact
-- 派 codex 出 `recovery_summary.md`：当前 phase / 已完成 artifact / 缺失 artifact / 建议下一步
-- cc 只读 summary 决定路由
+- 断线 / 续跑时禁止 cc 重读所有 artifact
+- 实操：`cc-leader state:get` 读 `current_phase` / `active_job_id` / `last_result_file_path` / `phase_result_dir` 等关键字段，只 `head` 当前 phase artifact
+- 全链分析时派 `Agent (general-purpose)` sub-agent 出 recovery summary
 
 #### state 查询去重
 
-- 每个 skill 入口处一次性 `cc-leader state:get` 拉全字段，把关键字段 (`workflow_id` / `current_phase` / `active_job_id` / `last_result_file_path`) 记到对话文本
-- 同一 skill 内后续动作复用这些字段，不再重复 `state:get`
-- 只在状态明确可能变化后 (派完 job / 收到 notification / 用户改了 state) 才再查
+- 每个 skill 入口处一次性 `cc-leader state:get` 拉全字段，关键字段记到对话文本
+- 同一 skill 内后续动作复用，不再重复 `state:get`
+- 只在状态明确变化后 (派完 job / 收到 notification / 用户改了 state) 再查
 
-#### session 长度控制
+#### session 接力
 
-- 单 workflow 完成 (final report 出 / STATUS=done) 后，主动建议用户：`workflow 已完成。建议 /clear 或开新 session，历史已存 memsearch。`
-- 单 phase 完成且下一个 phase 与上文耦合度低时，也可建议接力
-- 用户全局规则要求"任务链结束时主动 memsearch 存档"，本节兜底
-
-#### plan mode 文件
-
-- `EnterPlanMode` 后写到 plan 文件；后续动作只摘要回读，不全文回放进 cc
+单 workflow 完成 (final report 出) 后按用户全局规则：memsearch 存档 + 提示 `/clear` 或开新 session。本节不再赘述。
 
 #### 状态汇报一行制
 
-- 给用户的中间汇报压成一行，例：
-  - `phase-2: pass, 0 blocker, next=phase-3`
-  - `<job-id>: running, 12/20 task done, last_progress 3min ago`
-- JSON / 摘要文件不要展开重述；让用户问具体再展开
+中间汇报压成一行；JSON / 摘要文件不要展开重述。例：
+
+- `phase-2: pass, 0 blocker, next=phase-3`
+- `<job-id>: running, 12/20 task done, last_progress 3min ago`
 
 按状态路由：
 
