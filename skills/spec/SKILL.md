@@ -17,7 +17,14 @@ description: "Use when the user wants to start or continue a cc-leader workflow,
 ## 流程
 
 0. 建议用户切换模型: "建议切换到 Opus 4.7 (1M context) 模型以获得最佳 spec 质量。可用 /model 切换。"
-1. 确认当前就是目标项目根目录，先执行 `pwd`
+1. **强制 worktree gate** (避免 state 文件覆盖):
+   - 执行 `pwd` 确认当前 CWD
+   - 若 CWD 不在 `<project-root>/worktrees/<name>` 内 (即仍在主工作树或别处):
+     - 询问用户 worktree 名 (新任务簇名 / 复用现有)
+     - 新建: `git worktree add worktrees/<name> -b cc-leader/<name>`
+     - 进入: `EnterWorktree path=worktrees/<name>` (后续所有 `cc-leader` CLI 都在 worktree CWD 跑)
+   - 若已在某 worktree 内: 直接继续, 该 worktree 的 `.cc-leader/session.json` 是本 spec 的独立 state
+   - **关键**: `cc-leader` state 文件按 CWD 存; 不切 worktree 直接在主仓 init 新 spec, 会用 `--force` 覆盖既有 workflow state
 2. 检测已有 workflow: 执行 `cc-leader state:get`
    - 如果已有 workflow 且 `spec_approved == true`:
      - 提示用户: "已有已批准的 workflow <workflow_id>, spec 在 <spec_path>。用 /cc-leader-run 继续执行。"

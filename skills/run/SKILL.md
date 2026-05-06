@@ -19,11 +19,14 @@ description: "Use when the user wants to execute a cc-leader workflow after spec
 ## 前置检查
 
 0. 自动切换模型: 执行 `/model sonnet medium`，run 阶段由 worker (codex) 干活，cc 只做调度，Sonnet 4.6 medium 足够
-1. 执行 `cc-leader state:get`
-2. 确认 `spec_approved == true`
-3. 如果还没批准，提示用户先用 `/cc-leader-spec`
-4. 同时确认 `spec_review_passed == true`。如果 review 还没通过，也先回 `/cc-leader-spec`
-5. 问用户：`业务代码允许写入哪个目录?`
+1. **worktree gate**: 执行 `pwd`
+   - 若 CWD 不在 `<project-root>/worktrees/<name>` 内 → 拒绝继续, 提示用户: "run 必须在 worktree 内执行 (state 按 CWD 存); 请先用 /cc-leader-spec 进入或新建 worktree"
+   - 若已在 worktree 内 → 继续
+2. 执行 `cc-leader state:get`
+3. 确认 `spec_approved == true`
+4. 如果还没批准，提示用户先用 `/cc-leader-spec`
+5. 同时确认 `spec_review_passed == true`。如果 review 还没通过，也先回 `/cc-leader-spec`
+6. 问用户：`业务代码允许写入哪个目录?`
 
 ## 执行
 
