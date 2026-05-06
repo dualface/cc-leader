@@ -34,10 +34,7 @@ cc-leader workflow 的所有写动作 (spec / plan / task / execute / review / r
 
 - 路径约定：worktree 放在**项目根目录**的 `worktrees/` 子目录下，路径形如 `worktrees/<worktree-name>`
 - 命名按"任务簇"取名 (例如 `worktrees/auth-overhaul`、`worktrees/billing-q2`)，**不**绑死单个 workflow slug
-- **同一 worktree 串行承载多个 spec / workflow**：复杂任务拆成多个 spec 时，在同一 worktree 内串行推进 — 上一个 workflow 完成 (final report 出 / STATUS=done) 后再起下一个
-  - CLI 限制：单 repo 同时只活跃**一个** workflow (`.cc-leader/session.json` 单状态)
-  - 切换到下一 spec：先 `cc-leader state:get` 确认当前 workflow 已 done，再 `cc-leader init --slug <new-slug> --force` 起新 workflow
-  - 真要并行多 workflow：各自一个 worktree (一 worktree 一活跃 workflow)
+- **每个 worktree 同一时间只活跃一个 workflow**：`.cc-leader/session.json` 是**按 CWD** 存的，每个 worktree 独立一份 state，互不污染
 - 同一 workflow 的所有阶段始终共用同一个 worktree，从 spec 起一直用到 report；不要中途切到别的 worktree
 - 进入任何 phase skill 前先检查 `pwd`：
   - 若已在某 `<project-root>/worktrees/<name>` 内 → 继续在该 worktree 工作
@@ -46,6 +43,31 @@ cc-leader workflow 的所有写动作 (spec / plan / task / execute / review / r
     - 复用：直接 `EnterWorktree path=worktrees/<name>`
 - 用户主动 `ExitWorktree` 后再继续 workflow，必须重新切回原 worktree，不要在主工作树续跑
 - worktree 目录要纳入 `.gitignore` (`worktrees/`)，避免误提交
+
+#### 多 spec 推进模式
+
+复杂任务拆成多个 spec 时, 按是否需要并行选择模式:
+
+##### A. 串行 (默认, 同一 worktree)
+
+- 上一个 workflow 完成 (final report 出 / STATUS=done) 后再起下一个
+- 切换到下一 spec：先 `cc-leader state:get` 确认当前 workflow 已 done，再 `cc-leader init --slug <new-slug> --force` 起新 workflow
+- 优点：分支线性, merge 简单, 配额 / 资源不抢
+
+##### B. 并行 (各自一个 worktree)
+
+- 每个并行 spec 独占一个 worktree (`worktrees/<task-cluster>`)
+- 每个 worktree 独立 `.cc-leader/session.json`、独立 codex worker、独立分支 (`cc-leader/<task-cluster>`)
+- 启动方式：**多开 cc session** (多终端 / 多 IDE 窗口)，每个 session 进入一个 worktree (`EnterWorktree path=worktrees/<name>`)；单 cc session 的 CWD 单一，无法同时管多个 worktree
+- 必须满足的约束：
+  - **write-scope 不重叠**：每个 workflow 的 `cc-leader run --write-scope <path>` 划独立目录 (例如 `src/auth/` vs `src/billing/`)；重叠会让两个 phaseExecution 互相覆盖且产生未提交冲突
+  - **远端 merge 串行**：worktree A 的 PR merge 后，worktree B 要 `git fetch && git rebase origin/main` 再继续，避免 PR 间冲突堆积
+  - **配额 / 资源**：codex 并发跑会摊薄 RPS, 磁盘 / CPU 共享; 同时跑 ≤2–3 个 worktree 较稳
+  - **memsearch 是全局**：不同 worktree 的 session 写入会交叉, 检索时按 worktree slug / spec slug 过滤
+- 启动顺序建议：
+  1. `git worktree add worktrees/<name-A> -b cc-leader/<name-A>` (主 cc session 内)
+  2. 新开 cc session, `cd worktrees/<name-A>`, 跑 spec / run
+  3. 再回主 session 加 worktree B, 重复
 
 ### 后台任务看护规则
 
