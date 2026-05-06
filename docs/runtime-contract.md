@@ -103,10 +103,15 @@ codex exec --json --dangerously-bypass-approvals-and-sandbox "$PROMPT_CONTENT"
 - `git tag pre-<job-id>`
 - 或 `git switch -c cc-leader/<job-id>`
 
-未来如果启用并行 code-changing phase：
+未来如果启用同 workflow 内并行 code-changing phase：
 
 - 必须切到 `git worktree`
-- 路径建议：`.cc-leader/worktrees/<phase-id>/`
+- 路径建议：`.cc-leader/worktrees/<phase-id>/` (workflow 内 phase 隔离)
+
+注意区分两层 worktree 用法:
+
+- **跨 workflow / 多 spec 并行** (已支持, 用户操作层): 项目根 `worktrees/<task-cluster>/`, 每 worktree 独立 `.cc-leader/session.json`, 详见 README "Worktree 与多 spec" 段
+- **同 workflow 内 phase 并行** (本节, 未来扩展): `.cc-leader/worktrees/<phase-id>/`, 由 harness 自动管理
 
 ## 日志保存
 

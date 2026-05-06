@@ -23,26 +23,26 @@
 
 ## 什么时候用什么
 
-| 入口 | 用途 | 适合场景 |
-|---|---|---|
-| `/cc-leader-spec` | 起草或续接 spec | 还没批准 spec，或要重写 spec |
-| `/cc-leader-run` | 按 workflow gate 自动推进 | 需要完整 spec / review / report 链 |
+| 入口               | 用途                               | 适合场景                               |
+| ------------------ | ---------------------------------- | -------------------------------------- |
+| `/cc-leader-spec`  | 起草或续接 spec                    | 还没批准 spec，或要重写 spec           |
+| `/cc-leader-run`   | 按 workflow gate 自动推进          | 需要完整 spec / review / report 链     |
 | `/cc-leader-drive` | 启动 detached codex 做用户指定任务 | 不想走 workflow，只想让 codex 持续做事 |
 
 CLI 对应入口：
 
-| 命令 | 用途 |
-|---|---|
-| `cc-leader init` | 初始化 workflow state |
-| `cc-leader state:get` | 读取 workflow state |
-| `cc-leader state:set` | 写 workflow state |
-| `cc-leader resolve-phase` | 推断当前 workflow phase |
-| `cc-leader dispatch` | 高级手动派发单个 worker job |
-| `cc-leader job:status` | 查看 workflow active job 或指定 job 状态 |
-| `cc-leader run` | 自动推进 workflow |
-| `cc-leader drive` | 启动或接管 detached codex drive |
-| `cc-leader report` | 手动生成最终报告 |
-| `cc-leader prepare-job` | 只生成 prompt 和 run 目录，不实际执行 |
+| 命令                      | 用途                                     |
+| ------------------------- | ---------------------------------------- |
+| `cc-leader init`          | 初始化 workflow state                    |
+| `cc-leader state:get`     | 读取 workflow state                      |
+| `cc-leader state:set`     | 写 workflow state                        |
+| `cc-leader resolve-phase` | 推断当前 workflow phase                  |
+| `cc-leader dispatch`      | 高级手动派发单个 worker job              |
+| `cc-leader job:status`    | 查看 workflow active job 或指定 job 状态 |
+| `cc-leader run`           | 自动推进 workflow                        |
+| `cc-leader drive`         | 启动或接管 detached codex drive          |
+| `cc-leader report`        | 手动生成最终报告                         |
+| `cc-leader prepare-job`   | 只生成 prompt 和 run 目录，不实际执行    |
 
 兼容性说明：
 
@@ -96,28 +96,34 @@ cd cc-leader
 
 ### 1. 走完整 workflow
 
-进入目标项目根目录：
+进入目标项目根目录, 并先建一个 worktree (避免 state 被覆盖, 见下文 "Worktree 与多 spec"):
 
 ```bash
 cd <target-project>
+git worktree add worktrees/<task-cluster> -b cc-leader/<task-cluster>
+cd worktrees/<task-cluster>
 ```
 
-在 Claude Code 里：
+在 Claude Code 里:
 
 ```text
 /cc-leader-spec
 ```
 
-spec 通过并批准后：
+spec 通过并批准后:
 
 ```text
 /cc-leader-run
 ```
 
-如果只用 CLI，最小流程是：
+(`/cc-leader-spec` 内部会强制 worktree gate; 用户也可让 cc 用 EnterWorktree 自动切。手动 cd 是 CLI 直用的等价方式。)
+
+如果只用 CLI, 最小流程是:
 
 ```bash
 cd <target-project>
+git worktree add worktrees/<task-cluster> -b cc-leader/<task-cluster>
+cd worktrees/<task-cluster>
 cc-leader init --slug <project-slug>
 cc-leader state:set --set spec_path=docs/specs/<workflow-id>.md
 cc-leader dispatch --job specAdversarialReview
@@ -143,22 +149,22 @@ cc-leader drive
 
 ### Phase 顺序
 
-| # | Phase | 做什么 | Gate |
-|---|---|---|---|
-| 1 | `drafting-specs` | 和用户一起写 spec，worker 做对抗式 review | spec 批准 |
-| 2 | `writing-phase-plans` | 基于已批准 spec 写 phase plan list | self review |
-| 3 | `writing-phase-tasks` | 为每个 phase 写 task list | self review |
-| 4 | `executing-phase-tasks` | 串行执行可运行 phase | 每 phase 完成后 review |
-| 5 | `reviewing-phase-results` | phase review + final spec review | 全部 pass 后报告 |
-| 6 | `reporting-results` | `cc` 汇总最终报告 | 完成 |
+| #   | Phase                     | 做什么                                    | Gate                   |
+| --- | ------------------------- | ----------------------------------------- | ---------------------- |
+| 1   | `drafting-specs`          | 和用户一起写 spec，worker 做对抗式 review | spec 批准              |
+| 2   | `writing-phase-plans`     | 基于已批准 spec 写 phase plan list        | self review            |
+| 3   | `writing-phase-tasks`     | 为每个 phase 写 task list                 | self review            |
+| 4   | `executing-phase-tasks`   | 串行执行可运行 phase                      | 每 phase 完成后 review |
+| 5   | `reviewing-phase-results` | phase review + final spec review          | 全部 pass 后报告       |
+| 6   | `reporting-results`       | `cc` 汇总最终报告                         | 完成                   |
 
 ### Workflow 状态文件
 
-默认状态文件：
+默认状态文件:
 
-- `.cc-leader/session.json`
+- `.cc-leader/session.json` (相对于 `cc-leader` 命令的 CWD)
 
-状态里重点字段：
+状态里重点字段:
 
 - `workflow_id`
 - `current_phase`
@@ -176,6 +182,23 @@ cc-leader drive
 - `last_result_file_path`
 
 不要手改这个文件。只通过 `cc-leader` CLI 读写。
+
+### Worktree 与多 spec
+
+`cc-leader` 把 `.cc-leader/session.json` 写在**当前 CWD** 下 (`process.cwd()` 解析)。同一 CWD 同一时间只能跑一个 workflow; `cc-leader init` 第二次会要求 `--force`, 一旦 force 就**直接覆盖**前一个 workflow 的 state, 历史只剩 `.cc-leader/runs/<workflow-id>/` 里的 artifact。
+
+所以多 spec 推进有两种模式:
+
+1. **串行 (默认)**: 同一 worktree 内, 上一个 workflow `done` 后再 `cc-leader init --slug <new> --force` 起下一个
+2. **并行**: 每个 spec 独占一个 git worktree, 路径约定 `worktrees/<task-cluster>/`, 每个 worktree 独立一份 `.cc-leader/session.json`, 互不污染
+   - 启动: `git worktree add worktrees/<name> -b cc-leader/<name>`
+   - 单个 cc session 的 CWD 单一, 并行需多开 cc session, 每个 session `cd` 进各自的 worktree (或用 `EnterWorktree path=worktrees/<name>`)
+   - **必须** 给每个并行 workflow 划独立 `--write-scope` 路径, 否则 phaseExecution 会互相覆盖
+   - 远端 PR 建议串行 merge, 避免冲突堆积
+
+`/cc-leader-spec` 入口已强制 worktree gate: 不在 `worktrees/<name>` 下不会让你 `init`, 防误覆盖。直用 CLI 时请自行 `cd` 到目标 worktree。
+
+把 `worktrees/` 加到 `.gitignore`, 避免 worktree 子目录意外被主仓提交。
 
 ### Workflow 运行目录
 
@@ -263,12 +286,12 @@ cc-leader job:status --job-id <job-id>
 
 ### `drive` 只看 4 类里程碑
 
-| 事件 | `milestone.type` | 意义 |
-|---|---|---|
-| PR merge | `pr_merged` | codex 报告 PR 已合并 |
-| CI 失败 | `ci_failed` | codex 报告 CI / checks / pipeline 失败 |
-| 需要用户介入 | `needs_user` | 真的需要用户提供输入、做决策、或处理 blocker |
-| drive 结束 | `drive_finished` | drive 已经结束 |
+| 事件         | `milestone.type` | 意义                                         |
+| ------------ | ---------------- | -------------------------------------------- |
+| PR merge     | `pr_merged`      | codex 报告 PR 已合并                         |
+| CI 失败      | `ci_failed`      | codex 报告 CI / checks / pipeline 失败       |
+| 需要用户介入 | `needs_user`     | 真的需要用户提供输入、做决策、或处理 blocker |
+| drive 结束   | `drive_finished` | drive 已经结束                               |
 
 非里程碑进展：
 
@@ -369,15 +392,15 @@ cc-leader drive \
 
 ## `run` 和 `drive` 的区别
 
-| 维度 | `run` | `drive` |
-|---|---|---|
-| 目标 | 推 workflow | 跑用户指定任务 |
-| 是否依赖 spec/gate | 是 | 否 |
-| 状态文件 | `.cc-leader/session.json` | `.cc-leader/drive-state.json` |
-| 恢复入口 | `cc-leader run` | `cc-leader drive` |
-| 监控对象 | worker job | detached codex session |
-| 用户通知 | 每次 `run` 停点 | 只有 4 类里程碑 |
-| 推荐用途 | 正式开发流程 | 独立长任务、少打断执行 |
+| 维度               | `run`                     | `drive`                       |
+| ------------------ | ------------------------- | ----------------------------- |
+| 目标               | 推 workflow               | 跑用户指定任务                |
+| 是否依赖 spec/gate | 是                        | 否                            |
+| 状态文件           | `.cc-leader/session.json` | `.cc-leader/drive-state.json` |
+| 恢复入口           | `cc-leader run`           | `cc-leader drive`             |
+| 监控对象           | worker job                | detached codex session        |
+| 用户通知           | 每次 `run` 停点           | 只有 4 类里程碑               |
+| 推荐用途           | 正式开发流程              | 独立长任务、少打断执行        |
 
 ## 外部依赖风险策略
 
@@ -395,38 +418,38 @@ cc-leader drive \
 
 默认 artifact 目录：
 
-| Artifact | 默认路径 |
-|---|---|
-| spec | `docs/specs/` |
-| spec review | `docs/reviews/specs/` |
-| override log | `docs/reviews/overrides/` |
-| phase plan list | `docs/plans/` |
-| phase task list | `docs/tasks/` |
-| phase result | `docs/results/` |
-| phase review | `docs/reviews/phases/` |
+| Artifact          | 默认路径                   |
+| ----------------- | -------------------------- |
+| spec              | `docs/specs/`              |
+| spec review       | `docs/reviews/specs/`      |
+| override log      | `docs/reviews/overrides/`  |
+| phase plan list   | `docs/plans/`              |
+| phase task list   | `docs/tasks/`              |
+| phase result      | `docs/results/`            |
+| phase review      | `docs/reviews/phases/`     |
 | final spec review | `docs/reviews/spec-final/` |
-| final report | `docs/reports/` |
+| final report      | `docs/reports/`            |
 
 这些目录不要求预先存在，harness 会在写入时创建。
 
 ## 重要文件
 
-| 类别 | 文件 |
-|---|---|
-| manifest | [cc-leader.manifest.json](cc-leader.manifest.json) |
-| bootstrap skill | [skills/using-cc-leader/SKILL.md](skills/using-cc-leader/SKILL.md) |
-| 用户入口 skill | [skills/spec/SKILL.md](skills/spec/SKILL.md) · [skills/run/SKILL.md](skills/run/SKILL.md) · [skills/drive/SKILL.md](skills/drive/SKILL.md) |
-| harness | [scripts/cc-leader-harness.mjs](scripts/cc-leader-harness.mjs) |
-| 安装脚本 | [scripts/install.sh](scripts/install.sh) |
-| 卸载脚本 | [scripts/uninstall.sh](scripts/uninstall.sh) |
-| 校验脚本 | [scripts/validate-skill-pack.mjs](scripts/validate-skill-pack.mjs) |
-| smoke 样例 | [scripts/smoke-run.mjs](scripts/smoke-run.mjs) |
-| 状态机 | [docs/state-machine.md](docs/state-machine.md) |
-| transport 合同 | [docs/transport-contract.md](docs/transport-contract.md) |
-| runtime 合同 | [docs/runtime-contract.md](docs/runtime-contract.md) |
-| worker prompt 合同 | [docs/worker-prompt-contracts.md](docs/worker-prompt-contracts.md) |
-| harness 样例 | [docs/harness-example.md](docs/harness-example.md) |
-| artifact 样例 | [docs/examples/minimal-todo/](docs/examples/minimal-todo/) |
+| 类别               | 文件                                                                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| manifest           | [cc-leader.manifest.json](cc-leader.manifest.json)                                                                                         |
+| bootstrap skill    | [skills/using-cc-leader/SKILL.md](skills/using-cc-leader/SKILL.md)                                                                         |
+| 用户入口 skill     | [skills/spec/SKILL.md](skills/spec/SKILL.md) · [skills/run/SKILL.md](skills/run/SKILL.md) · [skills/drive/SKILL.md](skills/drive/SKILL.md) |
+| harness            | [scripts/cc-leader-harness.mjs](scripts/cc-leader-harness.mjs)                                                                             |
+| 安装脚本           | [scripts/install.sh](scripts/install.sh)                                                                                                   |
+| 卸载脚本           | [scripts/uninstall.sh](scripts/uninstall.sh)                                                                                               |
+| 校验脚本           | [scripts/validate-skill-pack.mjs](scripts/validate-skill-pack.mjs)                                                                         |
+| smoke 样例         | [scripts/smoke-run.mjs](scripts/smoke-run.mjs)                                                                                             |
+| 状态机             | [docs/state-machine.md](docs/state-machine.md)                                                                                             |
+| transport 合同     | [docs/transport-contract.md](docs/transport-contract.md)                                                                                   |
+| runtime 合同       | [docs/runtime-contract.md](docs/runtime-contract.md)                                                                                       |
+| worker prompt 合同 | [docs/worker-prompt-contracts.md](docs/worker-prompt-contracts.md)                                                                         |
+| harness 样例       | [docs/harness-example.md](docs/harness-example.md)                                                                                         |
+| artifact 样例      | [docs/examples/minimal-todo/](docs/examples/minimal-todo/)                                                                                 |
 
 ## 开发与校验
 
