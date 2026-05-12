@@ -39,6 +39,7 @@ description: 当 cc 需要和用户一起产出已批准 spec，并在进入 pla
    - 向用户总结问题
    - 和用户一起改 spec
    - 再跑一次对抗式 review
+   - **2 轮 revise 上限**: 每轮 dispatch 前先 `cc-leader state:get` 看 `spec_review_revise_count`. >= 2 时硬停, 让用户三选一 (override / 放弃 / 明确要求再审一轮并用 `--allow-after-revise-cap`). 详细规则见 `cc-leader-spec` SKILL.md 第 10 条. 严禁自动重置计数器或自动加旁路 flag.
 8. 如果 worker 通过，或用户 override 剩余问题：
    - **在请求用户批准前，必须单独朗读 `external_dependency_risks` 清单**（如有），让用户知情
    - 把当前 spec 交给用户审批

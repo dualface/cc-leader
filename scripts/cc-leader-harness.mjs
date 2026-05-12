@@ -71,7 +71,8 @@ function printHelp() {
   run [--state-file <path>] [--write-scope <path>] [--timeout-seconds <n>]
   work [--state-file <path>] [--write-scope <path>] [--timeout-seconds <n>]
   prepare-job --job <name> [--state-file <path>] [--phase-id <id>] [--write-scope <path>] [--phase-review-path <path> ...] [--override key=value ...]
-  dispatch --job <name> [--state-file <path>] [--phase-id <id>] [--write-scope <path>] [--phase-review-path <path> ...] [--override key=value ...] [--timeout-seconds <n>] [--dry-run]
+  dispatch --job <name> [--state-file <path>] [--phase-id <id>] [--write-scope <path>] [--phase-review-path <path> ...] [--override key=value ...] [--timeout-seconds <n>] [--dry-run] [--allow-after-revise-cap]
+    --allow-after-revise-cap: 仅用于 specAdversarialReview. spec_review_revise_count >= 2 时旁路一次硬 gate; 必须由用户明确授权才能加.
 `);
 }
 
@@ -92,7 +93,7 @@ function parseArgs(argv) {
       continue;
     }
     const key = token.slice(2);
-    if (["force", "dry-run"].includes(key)) {
+    if (["force", "dry-run", "allow-after-revise-cap"].includes(key)) {
       args[key] = true;
       i += 1;
       continue;
@@ -157,6 +158,11 @@ function validateState(state) {
     ["current_phase", (value) => typeof value === "string", "string"],
     ["spec_approved", (value) => typeof value === "boolean", "boolean"],
     ["spec_review_passed", (value) => typeof value === "boolean", "boolean"],
+    [
+      "spec_review_revise_count",
+      (value) => typeof value === "number" && Number.isFinite(value) && value >= 0,
+      "number >= 0",
+    ],
     ["phase_plan_review_passed", (value) => typeof value === "boolean", "boolean"],
     ["ready_phase_ids", (value) => Array.isArray(value), "array"],
     ["completed_phase_ids", (value) => Array.isArray(value), "array"],
@@ -1595,6 +1601,11 @@ function updateStateFromResult(state, jobContext, result) {
   if (result.job === "specAdversarialReview") {
     state.spec_review_path = toRepoRelativeIfInsideRoot(jobContext.variables.spec_review_path);
     state.spec_review_passed = result.verdict === "pass";
+    if (result.verdict === "pass") {
+      state.spec_review_revise_count = 0;
+    } else if (result.verdict === "revise") {
+      state.spec_review_revise_count = (state.spec_review_revise_count ?? 0) + 1;
+    }
   }
 
   if (result.job === "phasePlanSynthesis") {
@@ -2417,6 +2428,21 @@ async function main() {
   if (!jobName) fail("缺少 --job");
 
   const state = readState(stateFile);
+
+  if (jobName === "specAdversarialReview") {
+    const reviseCount = state.spec_review_revise_count ?? 0;
+    if (reviseCount >= 2 && !args["allow-after-revise-cap"]) {
+      fail(
+        `specAdversarialReview gate: 已累计 ${reviseCount} 轮 revise (上限 2). ` +
+        `自动循环已停止. 让用户三选一: ` +
+        `(a) 接受当前 spec, 走 override 流程 (记 override + state:set spec_approved=true 等); ` +
+        `(b) 放弃本次 workflow; ` +
+        `(c) 用户明确要求再审一轮, 此时加 --allow-after-revise-cap 旁路一次. ` +
+        `旁路后若仍 revise, 计数器继续增长, gate 再次触发, 必须再次明确授权, 不允许自动重试.`,
+      );
+    }
+  }
+
   let jobContext = buildJobContext(jobName, state, args);
   const promptPath = manifest.workerJobs[jobName].dispatch.promptContractPath;
   const promptContent = renderPrompt(promptPath, jobContext.variables);

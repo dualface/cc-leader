@@ -67,12 +67,20 @@ description: "Use when the user wants to start or continue a cc-leader workflow,
    - 明确提示用户：`spec 已批准。用 /cc-leader-run 启动执行。`
 10. 如果 review 结果是 `revise`：
     - 总结关键问题、隐含假设、建议修改
-    - 和用户一起改 spec
-    - 重新执行 `cc-leader dispatch --job specAdversarialReview`
-    - **强制上限: 连续 2 轮 revise 后, 必须停止自动循环, 向用户展示累积问题清单, 让用户决定:**
-      - 继续修改 spec 再审一轮
-      - override 剩余问题, 接受当前 spec
-      - 放弃本次 workflow
+    - **每轮都先执行 `cc-leader state:get`, 读取 `spec_review_revise_count`** (CLI 已自动维护)
+    - 若 `spec_review_revise_count < 2`:
+      - 和用户一起改 spec
+      - 重新执行 `cc-leader dispatch --job specAdversarialReview`
+    - 若 `spec_review_revise_count >= 2`:
+      - **强制停止自动循环**. 不要再 dispatch, 不要继续问"要不要再审"
+      - CLI gate 兜底: 此时若直接 `dispatch --job specAdversarialReview` 会被拒, 错误信息会指引三选一
+      - 向用户展示累积问题清单 (本轮 + 历史 review 聚合), 让用户三选一:
+        1. 接受当前 spec, 走 override 流程 (跳步骤 11)
+        2. 放弃本次 workflow
+        3. **明确要求**再审一轮 — 用户必须主动说"再审一轮"或同义指令, Claude 才能执行
+           `cc-leader dispatch --job specAdversarialReview --allow-after-revise-cap` 跑一次
+      - 旁路后若仍 revise, 计数器继续 + 1, gate 再次触发, 重复三选一流程; 严禁自动重试
+    - **绝不**自动 `state:set --set spec_review_revise_count=0`, 也**绝不**自动加 `--allow-after-revise-cap`; 两者必须由用户主动触发
 11. 如果用户明确要求 override：
     - 记录 override 原因、范围、被跳过的 review 问题
     - 把 override 写进 spec 的 `Override 记录`
