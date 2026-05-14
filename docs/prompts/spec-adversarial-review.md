@@ -6,22 +6,26 @@
 
 - workflow_id: `{{workflow_id}}`
 - job_id: `{{job_id}}`
-- 主要读取：
-  - `{{spec_path}}`
-- 可选读取：
-  - 如果提供了 `{{previous_review_path}}`，读取上一轮 review，关注：
-    - 上轮 critical findings 是否已修正
-    - 不要重复提已修正的问题
-    - 新发现的问题才需要报告
-  - 只有 spec 里提到具体 repo 路径，且该路径会改变 verdict 时，才读 `{{repo_root}}` 下对应文件
+- 主要读取：spec 内容已内联在「输入内容」节，**不要**再用 shell 读 `{{spec_path}}`，除非要核实 repo 实际状态
+- 上轮 review：内容已内联（无则占位），路径 `{{previous_review_path}}`
+- 仅当 spec 明确引用且结论必须依赖 repo 事实时，才读 `{{repo_root}}` 下对应文件
 - 写入：
   - `{{spec_review_path}}`
   - `{{result_file_path}}`
 
+## 输入内容
+
+### spec (`{{spec_path}}`)
+
+{{spec_content}}
+
+### 上一轮 review (`{{previous_review_path}}`)
+
+{{previous_review_content}}
+
 ## 核心规则
 
-- 默认只读 `{{spec_path}}`
-- 不要读无关文件
+- 默认基于上面已内联的 spec 内容判断，**不要**再 sed/awk/cat 读 `{{spec_path}}`
 - 不要读 README、runtime、state machine、其他 prompt，除非 spec 明确引用且结论必须依赖它
 - 目标是快速给 `pass` 或 `revise`
 - 如果 `{{spec_review_path}}` 已存在，直接整文件覆盖
@@ -69,8 +73,8 @@
 
 ## 必做步骤
 
-1. 读 `{{spec_path}}`
-2. 只在必要时读少量 repo 上下文
+1. 直接基于「输入内容」节里已内联的 spec 判断（不再 shell 读）
+2. 如有上轮 review，按 Re-review 指引对照
 3. 产出 review 文档到 `{{spec_review_path}}`
 4. 产出结果 JSON 到 `{{result_file_path}}`
 
@@ -87,22 +91,23 @@
 
 ## Re-review 指引
 
-如果提供了 `{{previous_review_path}}`：
-1. 先读上轮 review 的 critical findings
-2. 逐条检查 spec 是否已修正
+如果「上一轮 review」内容非占位：
+
+1. 先看上轮 review 的 critical findings
+2. 逐条检查内联 spec 是否已修正
 3. 只报告：未修正的旧 critical + 新发现的 critical/advisory
-4. 已修正的问题标注“已修正，不再阻塞”
+4. 已修正的问题标注"已修正，不再阻塞"
 5. 上轮 advisory 不需要逐条复查
 
 ## 阻塞规则
 
 只有这几种情况才返回 `status: blocked`：
 
-- `{{spec_path}}` 缺失
-- `{{spec_path}}` 不可读
+- `{{spec_path}}` 缺失（内联段会显式标注"文件缺失"）
 - spec 内容明显不完整到无法形成任何有效 review
 
 verdict 判定：
+
 - 有 critical finding → `revise`
 - 只有 advisory finding → `pass`
 - 只有 external_dependency_risks → `pass`
@@ -116,8 +121,11 @@ verdict 判定：
 - 结果 JSON 格式按 `docs/templates/worker-result-template.json`
 - 结果 JSON 直接写到 `{{result_file_path}}`
 - 不要把最终结果只写到 stdout/stderr
+- **JSON 写入规则**：必须按 `docs/transport-contract.md` 的「结果文件写入方式」和「JSON 编辑工具规则」执行：单次 heredoc 写入 + jq 校验，禁止 sed/awk 改 JSON
 
 ## 结果 JSON 示例
+
+必须用 `cat > "{{result_file_path}}" <<'EOF' ... EOF` 单次写入，写完用 `jq -e . "{{result_file_path}}" > /dev/null` 校验。
 
 ```json
 {

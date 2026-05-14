@@ -330,6 +330,94 @@ function extractSection(filePath, heading) {
   return lines.slice(start + 1, end).join("\n").trim() || null;
 }
 
+const INLINE_SIZE_CAP_BYTES = 64 * 1024;
+
+function inlineFenceMarkdown(absPath, body) {
+  return `<!-- inline: ${absPath} -->\n\`\`\`markdown\n${body}\n\`\`\``;
+}
+
+function readArtifactInline(filePath, label) {
+  if (!filePath) return `(${label} 路径未提供)`;
+  const absPath = abs(filePath);
+  if (!fileExists(absPath)) {
+    return `(${label} 文件缺失: ${absPath} — 必要时用 shell 读取核实)`;
+  }
+  const text = readFileSync(absPath, "utf8");
+  if (Buffer.byteLength(text, "utf8") > INLINE_SIZE_CAP_BYTES) {
+    process.stderr.write(
+      `warn: ${label} 内容超 ${INLINE_SIZE_CAP_BYTES} 字节, 回退到路径模式: ${absPath}\n`,
+    );
+    return `(${label} 内容超出内联上限 ${INLINE_SIZE_CAP_BYTES} 字节, 直接读路径: ${absPath})`;
+  }
+  return inlineFenceMarkdown(absPath, text.replace(/\n+$/, ""));
+}
+
+function extractPhaseBlock(planPath, phaseId) {
+  if (!planPath || !fileExists(planPath)) {
+    return `(phase plan 缺失: ${planPath ?? "(未传)"} — 用 shell 读取核实)`;
+  }
+  if (!phaseId) return `(未指定 phase_id)`;
+  const lines = readFileSync(abs(planPath), "utf8").split("\n");
+  const headingRe = new RegExp(`^###\\s.*${phaseId.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}`);
+  const start = lines.findIndex((line) => headingRe.test(line));
+  if (start === -1) {
+    return `(phase plan 中未找到 ${phaseId} 的 \`### 阶段\` 块 — 用 shell 在 ${abs(planPath)} 里查)`;
+  }
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.startsWith("### ") || line.startsWith("## ")) {
+      end = i;
+      break;
+    }
+  }
+  const body = lines.slice(start, end).join("\n").trim();
+  if (!body) return `(${phaseId} 块为空)`;
+  return inlineFenceMarkdown(abs(planPath), body);
+}
+
+function extractSpecSummary(specPath) {
+  if (!specPath || !fileExists(specPath)) {
+    return `(spec 缺失: ${specPath ?? "(未传)"} — 用 shell 读取核实)`;
+  }
+  const wanted = ["目标", "约束", "成功标准"];
+  const parts = [];
+  for (const heading of wanted) {
+    const body = extractSection(abs(specPath), heading);
+    if (body) parts.push(`## ${heading}\n\n${body}`);
+  }
+  if (parts.length === 0) {
+    return `(spec 未找到任何 ${wanted.join(" / ")} section — 直接读 ${abs(specPath)})`;
+  }
+  return inlineFenceMarkdown(abs(specPath), parts.join("\n\n"));
+}
+
+function concatPhaseReviews(reviewPaths) {
+  if (!Array.isArray(reviewPaths) || reviewPaths.length === 0) {
+    return `(无 phase review 输入)`;
+  }
+  const blocks = [];
+  let totalBytes = 0;
+  for (const reviewPath of reviewPaths) {
+    const absPath = abs(reviewPath);
+    if (!fileExists(absPath)) {
+      blocks.push(`<!-- missing: ${absPath} -->\n(文件缺失 — 用 shell 读取核实)`);
+      continue;
+    }
+    const text = readFileSync(absPath, "utf8").replace(/\n+$/, "");
+    totalBytes += Buffer.byteLength(text, "utf8");
+    if (totalBytes > INLINE_SIZE_CAP_BYTES) {
+      process.stderr.write(
+        `warn: phase reviews concat 累计超 ${INLINE_SIZE_CAP_BYTES} 字节, 后续 review 仅列路径\n`,
+      );
+      blocks.push(`<!-- skipped (size cap): ${absPath} -->`);
+      continue;
+    }
+    blocks.push(inlineFenceMarkdown(absPath, text));
+  }
+  return blocks.join("\n\n---\n\n");
+}
+
 function readStatusFromMarkdown(filePath) {
   if (!filePath || !fileExists(filePath)) return null;
   const raw = readMarkdownField(filePath, "status");
@@ -564,10 +652,15 @@ function buildJobContext(jobName, state, args) {
     deriveArtifactPath("finalSpecReview", workflowId);
 
   if (jobName === "specAdversarialReview") {
+    const hasPrev = existsSync(abs(specReviewPath));
     Object.assign(derived, {
       spec_path: abs(specPath),
       spec_review_path: abs(specReviewPath),
-      previous_review_path: existsSync(abs(specReviewPath)) ? abs(specReviewPath) : "(无上轮 review)",
+      previous_review_path: hasPrev ? abs(specReviewPath) : "(无上轮 review)",
+      spec_content: readArtifactInline(abs(specPath), "spec"),
+      previous_review_content: hasPrev
+        ? readArtifactInline(abs(specReviewPath), "previous review")
+        : "(无上轮 review)",
     });
   }
 
@@ -575,6 +668,7 @@ function buildJobContext(jobName, state, args) {
     Object.assign(derived, {
       spec_path: abs(specPath),
       phase_plan_list_path: abs(phasePlanListPath),
+      spec_content: readArtifactInline(abs(specPath), "spec"),
     });
   }
 
@@ -582,48 +676,64 @@ function buildJobContext(jobName, state, args) {
     if (!phaseId) fail("phaseTaskSynthesis 需要 --phase-id");
     Object.assign(derived, {
       phase_id: phaseId,
+      spec_path: abs(specPath),
       phase_plan_list_path: abs(phasePlanListPath),
       phase_task_list_path: abs(
         args["phase-task-list-path"] ?? deriveArtifactPath("phaseTaskList", phaseId),
       ),
+      spec_summary_content: extractSpecSummary(abs(specPath)),
+      phase_plan_block_content: extractPhaseBlock(abs(phasePlanListPath), phaseId),
     });
   }
 
   if (jobName === "phaseExecution") {
     if (!phaseId) fail("phaseExecution 需要 --phase-id");
     if (!args["write-scope"]) fail("phaseExecution 需要 --write-scope");
+    const phaseTaskListPath = abs(
+      args["phase-task-list-path"] ?? deriveArtifactPath("phaseTaskList", phaseId),
+    );
     Object.assign(derived, {
       phase_id: phaseId,
-      phase_task_list_path: abs(
-        args["phase-task-list-path"] ?? deriveArtifactPath("phaseTaskList", phaseId),
-      ),
+      phase_task_list_path: phaseTaskListPath,
       phase_result_path: abs(args["phase-result-path"] ?? deriveArtifactPath("phaseResult", phaseId)),
       write_scope: args["write-scope"],
+      phase_task_list_content: readArtifactInline(phaseTaskListPath, "phase task list"),
     });
   }
 
   if (jobName === "phaseReview") {
     if (!phaseId) fail("phaseReview 需要 --phase-id");
+    const phaseTaskListPath = abs(
+      args["phase-task-list-path"] ?? deriveArtifactPath("phaseTaskList", phaseId),
+    );
+    const phaseResultPath = abs(args["phase-result-path"] ?? deriveArtifactPath("phaseResult", phaseId));
     Object.assign(derived, {
       phase_id: phaseId,
       phase_plan_list_path: abs(phasePlanListPath),
-      phase_task_list_path: abs(
-        args["phase-task-list-path"] ?? deriveArtifactPath("phaseTaskList", phaseId),
-      ),
-      phase_result_path: abs(args["phase-result-path"] ?? deriveArtifactPath("phaseResult", phaseId)),
+      phase_task_list_path: phaseTaskListPath,
+      phase_result_path: phaseResultPath,
       phase_review_path: abs(args["phase-review-path-output"] ?? deriveArtifactPath("phaseReview", phaseId)),
+      phase_plan_block_content: extractPhaseBlock(abs(phasePlanListPath), phaseId),
+      phase_task_list_content: readArtifactInline(phaseTaskListPath, "phase task list"),
+      phase_result_content: readArtifactInline(phaseResultPath, "phase result"),
     });
   }
 
   if (jobName === "finalSpecReview") {
-    const reviewPaths =
-      args["phase-review-path"]?.map((p) => `  - \`${abs(p)}\``).join("\n") ??
-      uniq((state.reviewed_phase_ids ?? []).map((phase) => `  - \`${abs(deriveArtifactPath("phaseReview", phase))}\``)).join("\n");
+    const reviewPathList =
+      args["phase-review-path"]?.map((p) => abs(p)) ??
+      uniq((state.reviewed_phase_ids ?? []).map((phase) => abs(deriveArtifactPath("phaseReview", phase))));
+    const reviewPaths = reviewPathList.length
+      ? reviewPathList.map((p) => `  - \`${p}\``).join("\n")
+      : "  - <none>";
     Object.assign(derived, {
       spec_path: abs(specPath),
       phase_plan_list_path: abs(phasePlanListPath),
-      phase_review_paths: reviewPaths || "  - <none>",
+      phase_review_paths: reviewPaths,
       final_spec_review_path: abs(finalSpecReviewPath),
+      spec_content: readArtifactInline(abs(specPath), "spec"),
+      phase_plan_list_content: readArtifactInline(abs(phasePlanListPath), "phase plan list"),
+      phase_reviews_concat_content: concatPhaseReviews(reviewPathList),
     });
   }
 

@@ -96,6 +96,19 @@ if (pkg && manifest) {
     assert(job.dispatch.requiredVariables.includes("result_file_path"), `${jobName}: requiredVariables 必须包含 result_file_path`);
     assert(typeof job.timeoutSeconds === "number" && job.timeoutSeconds > 0, `${jobName}: timeoutSeconds 不合法`);
     assert(typeof job.writesCode === "boolean", `${jobName}: writesCode 必须是布尔值`);
+
+    if (existsSync(abs(job.dispatch.promptContractPath))) {
+      const promptText = readText(job.dispatch.promptContractPath);
+      const placeholders = new Set(
+        [...promptText.matchAll(/{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}/g)].map((m) => m[1]),
+      );
+      for (const requiredVar of job.dispatch.requiredVariables) {
+        assert(
+          placeholders.has(requiredVar),
+          `${jobName}: requiredVariables 列 ${requiredVar} 但 prompt 未引用 {{${requiredVar}}}`,
+        );
+      }
+    }
   }
 }
 

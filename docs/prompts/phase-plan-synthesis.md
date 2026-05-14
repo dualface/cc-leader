@@ -6,17 +6,21 @@
 
 - workflow_id: `{{workflow_id}}`
 - job_id: `{{job_id}}`
-- 主要读取：
-  - `{{spec_path}}`
-- 可选读取：
-  - 只有 spec 提到具体 repo 路径，且会影响 phase 边界时，才读 `{{repo_root}}` 下对应文件
+- 主要读取：spec 内容已内联在「输入内容」节，**不要**再用 shell 读 `{{spec_path}}`，除非要核实 repo 实际状态
+- 仅当 spec 提到具体 repo 路径且会影响 phase 边界时，才读 `{{repo_root}}` 下对应文件
 - 写入：
   - `{{phase_plan_list_path}}`
   - `{{result_file_path}}`
 
+## 输入内容
+
+### spec (`{{spec_path}}`)
+
+{{spec_content}}
+
 ## 核心规则
 
-- 默认只读 `{{spec_path}}`
+- 默认基于上面已内联的 spec 内容判断，**不要**再 sed/awk/cat 读 `{{spec_path}}`
 - 不要读无关文件
 - 目标是快速产出可执行 phase plan list
 - 如果 `{{phase_plan_list_path}}` 已存在，直接整文件覆盖
@@ -24,7 +28,7 @@
 
 ## 必做步骤
 
-1. 读 `{{spec_path}}`
+1. 直接基于「输入内容」节里已内联的 spec 拆 phase（不再 shell 读）
 2. 拆出最小且有意义的 phase 顺序
 3. 明确每个 phase 的 deliverable、verification、depends_on
 4. 写 `{{phase_plan_list_path}}`
@@ -57,8 +61,7 @@
 
 只有这几种情况才返回 `status: blocked`：
 
-- `{{spec_path}}` 缺失
-- `{{spec_path}}` 不可读
+- 内联 spec 段标注"文件缺失"
 - spec 明显自相矛盾到无法拆 phase
 
 能给出 `revise` 时，不要返回 `blocked`。
@@ -68,8 +71,11 @@
 - phase plan 文档格式按 `docs/templates/phase-plan-list-template.md`
 - 结果 JSON 格式按 `docs/templates/worker-result-template.json`
 - 结果 JSON 直接写到 `{{result_file_path}}`
+- **JSON 写入规则**：必须按 `docs/transport-contract.md` 的「结果文件写入方式」和「JSON 编辑工具规则」执行：单次 heredoc 写入 + jq 校验，禁止 sed/awk 改 JSON
 
 ## 结果 JSON 示例
+
+必须用 `cat > "{{result_file_path}}" <<'EOF' ... EOF` 单次写入，写完用 `jq -e . "{{result_file_path}}" > /dev/null` 校验。
 
 ```json
 {

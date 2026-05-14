@@ -74,6 +74,59 @@ worker 退出前，必须写一个完整 JSON 对象到结果文件。
 
 `outputs` 只列真实写出的文件。没写出就不要报。
 
+## 结果文件写入方式
+
+worker 写 `result_file_path` 必须用单次 heredoc 一次写完。
+
+强制约束：
+
+- 必须用 `cat > "<path>" <<'EOF' ... EOF` 单次写出
+- 禁止 `>>` append
+- 禁止 `echo` / `printf` 分多次拼接
+- 禁止用 `sed` / `awk` 在已存在的结果文件上原地修改
+- 写完用 `jq -e . "<path>" > /dev/null` 校验 JSON 合法
+
+标准模式：
+
+```bash
+cat > "${result_file_path}" <<'EOF'
+{
+  "status": "done",
+  "job": "...",
+  "...": "..."
+}
+EOF
+jq -e . "${result_file_path}" > /dev/null
+```
+
+如果 JSON 内容需要嵌入变量，用 `jq -n --arg` 一次生成再 heredoc 写：
+
+```bash
+jq -n \
+  --arg workflow_id "${workflow_id}" \
+  --arg phase_id    "${phase_id}" \
+  '{status:"done", workflow_id:$workflow_id, phase_id:$phase_id, ...}' \
+  > "${result_file_path}"
+```
+
+## JSON 编辑工具规则
+
+worker 改任何 JSON 文件（结果文件、state 文件、artifact 内 JSON 块）必须用 `jq`。
+
+强制约束：
+
+- 修改字段：`jq '<filter>' in.json > out.json && mv out.json in.json`
+- 单次生成：`jq -n '<expression>' > out.json`
+- 禁止用 `sed` / `awk` / `tr` 修改任何 `.json` 文件
+- 禁止手写 `echo`/`printf` 拼接 JSON 字符串
+- 修改后必须 `jq -e . file > /dev/null` 校验
+
+理由：
+
+- `sed` 改 JSON 极易破坏转义和嵌套结构
+- 损坏的 JSON 会直接触发 transport 失败 + retry
+- `jq` 是结构化操作，比文本替换稳得多
+
 ## CC 读取规则
 
 worker 进程退出后，`cc` 必须：

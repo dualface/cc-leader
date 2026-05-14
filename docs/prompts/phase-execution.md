@@ -7,14 +7,19 @@
 - workflow_id: `{{workflow_id}}`
 - job_id: `{{job_id}}`
 - phase_id: `{{phase_id}}`
-- 主要读取：
-  - `{{phase_task_list_path}}`
+- 主要读取：task list 内容已内联在「输入内容」节，**不要**再用 shell 读 `{{phase_task_list_path}}`
 - 可选读取：
   - 只有 task 本身要求时，才读 `{{repo_root}}` 下对应文件
 - 写入：
   - `{{phase_result_path}}`
   - `{{result_file_path}}`
   - 业务文件只允许写 `{{write_scope}}` 内文件
+
+## 输入内容
+
+### phase task list (`{{phase_task_list_path}}`)
+
+{{phase_task_list_content}}
 
 ## 核心规则
 
@@ -28,7 +33,7 @@
 
 ## 必做步骤
 
-1. 读 `{{phase_task_list_path}}`
+1. 直接基于「输入内容」节里已内联的 task list 执行（不再 shell 读 task list）
 2. 在第一次业务写入前，先把 `{{write_scope}}` 内文件快照写到 `$(dirname "{{result_file_path}}")/before.sha`
 3. 按顺序执行 task
 4. 在 task 完成且写 phase result 前，再把 `{{write_scope}}` 内文件快照写到 `$(dirname "{{result_file_path}}")/after.sha`
@@ -56,7 +61,7 @@
 - shell 命令
 - 明确的逐路径检查记录
 
-但不能只是“已检查通过”这类空话。
+但不能只是"已检查通过"这类空话。
 
 优先使用这种形式：
 
@@ -85,7 +90,7 @@ diff -u "$(dirname "{{result_file_path}}")/before.sha" "$(dirname "{{result_file
 
 如果出现以下任一情况，返回 `status: blocked`：
 
-- task list 缺失
+- 内联 task list 标注"文件缺失 / 超出内联上限"且 fallback 读也失败
 - task list 自相矛盾
 - 需要写 scope 外的业务文件
 - 同一 verification 连续失败（**仅限内部逻辑验证**；见下方外部依赖规则）
@@ -107,8 +112,11 @@ diff -u "$(dirname "{{result_file_path}}")/before.sha" "$(dirname "{{result_file
 
 - phase result 文档格式按 `docs/templates/phase-result-template.md`
 - 结果 JSON 格式按 `docs/templates/worker-result-template.json`
+- **JSON 写入规则**：必须按 `docs/transport-contract.md` 的「结果文件写入方式」和「JSON 编辑工具规则」执行：单次 heredoc 写入 + jq 校验，禁止 sed/awk 改 JSON
 
 ## 结果 JSON 示例
+
+必须用 `cat > "{{result_file_path}}" <<'EOF' ... EOF` 单次写入，写完用 `jq -e . "{{result_file_path}}" > /dev/null` 校验。
 
 ```json
 {

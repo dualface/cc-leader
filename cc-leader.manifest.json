@@ -229,7 +229,9 @@
           "job_id",
           "spec_path",
           "spec_review_path",
-          "result_file_path"
+          "result_file_path",
+          "spec_content",
+          "previous_review_content"
         ]
       }
     },
@@ -253,7 +255,8 @@
           "job_id",
           "spec_path",
           "phase_plan_list_path",
-          "result_file_path"
+          "result_file_path",
+          "spec_content"
         ]
       }
     },
@@ -278,7 +281,9 @@
           "phase_id",
           "phase_plan_list_path",
           "phase_task_list_path",
-          "result_file_path"
+          "result_file_path",
+          "spec_summary_content",
+          "phase_plan_block_content"
         ]
       }
     },
@@ -304,7 +309,8 @@
           "phase_task_list_path",
           "phase_result_path",
           "write_scope",
-          "result_file_path"
+          "result_file_path",
+          "phase_task_list_content"
         ]
       }
     },
@@ -333,7 +339,10 @@
           "phase_task_list_path",
           "phase_result_path",
           "phase_review_path",
-          "result_file_path"
+          "result_file_path",
+          "phase_plan_block_content",
+          "phase_task_list_content",
+          "phase_result_content"
         ]
       }
     },
@@ -361,7 +370,10 @@
           "phase_plan_list_path",
           "phase_review_paths",
           "final_spec_review_path",
-          "result_file_path"
+          "result_file_path",
+          "spec_content",
+          "phase_plan_list_content",
+          "phase_reviews_concat_content"
         ]
       }
     }
