@@ -396,25 +396,9 @@ function concatPhaseReviews(reviewPaths) {
   if (!Array.isArray(reviewPaths) || reviewPaths.length === 0) {
     return `(无 phase review 输入)`;
   }
-  const blocks = [];
-  let totalBytes = 0;
-  for (const reviewPath of reviewPaths) {
-    const absPath = abs(reviewPath);
-    if (!fileExists(absPath)) {
-      blocks.push(`<!-- missing: ${absPath} -->\n(文件缺失 — 用 shell 读取核实)`);
-      continue;
-    }
-    const text = readFileSync(absPath, "utf8").replace(/\n+$/, "");
-    totalBytes += Buffer.byteLength(text, "utf8");
-    if (totalBytes > INLINE_SIZE_CAP_BYTES) {
-      process.stderr.write(
-        `warn: phase reviews concat 累计超 ${INLINE_SIZE_CAP_BYTES} 字节, 后续 review 仅列路径\n`,
-      );
-      blocks.push(`<!-- skipped (size cap): ${absPath} -->`);
-      continue;
-    }
-    blocks.push(inlineFenceMarkdown(absPath, text));
-  }
+  const blocks = reviewPaths.map((reviewPath) =>
+    readArtifactInline(reviewPath, `phase review ${reviewPath}`),
+  );
   return blocks.join("\n\n---\n\n");
 }
 
