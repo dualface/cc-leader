@@ -747,7 +747,8 @@ function buildJobContext(jobName, state, args) {
 function renderPrompt(promptPath, variables) {
   let text = readFileSync(packAbs(promptPath), "utf8");
   for (const [key, value] of Object.entries(variables)) {
-    text = text.replaceAll(`{{${key}}}`, String(value));
+    const literal = String(value);
+    text = text.split(`{{${key}}}`).join(literal);
   }
   const unresolved = text.match(/{{[^}]+}}/g);
   if (unresolved) {
