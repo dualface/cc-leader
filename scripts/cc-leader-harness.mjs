@@ -66,12 +66,15 @@ function printHelp() {
   state:set [--state-file <path>] --set key=value [--set key=value ...]
   resolve-phase [--state-file <path>]
   job:status [--state-file <path>] [--job-id <id>]
-  drive [--drive-state-file <path>] [--timeout-seconds <n>] [--max-auto-continue <n>] [--continue-prompt <text>] [--title <slug>] [prompt]
+  drive [--drive-state-file <path>] [--timeout-seconds <n>] [--max-auto-continue <n>] [--continue-prompt <text>] [--title <slug>] [--worker codex|claude] [--model <model>] [--effort low|medium|high|xhigh|max] [prompt]
   report [--state-file <path>] [--final-report-path <path>]
-  run [--state-file <path>] [--write-scope <path>] [--timeout-seconds <n>]
-  work [--state-file <path>] [--write-scope <path>] [--timeout-seconds <n>]
+  run [--state-file <path>] [--write-scope <path>] [--timeout-seconds <n>] [--worker codex|claude] [--model <model>] [--effort low|medium|high|xhigh|max]
+  work [--state-file <path>] [--write-scope <path>] [--timeout-seconds <n>] [--worker codex|claude] [--model <model>] [--effort low|medium|high|xhigh|max]
   prepare-job --job <name> [--state-file <path>] [--phase-id <id>] [--write-scope <path>] [--phase-review-path <path> ...] [--override key=value ...]
-  dispatch --job <name> [--state-file <path>] [--phase-id <id>] [--write-scope <path>] [--phase-review-path <path> ...] [--override key=value ...] [--timeout-seconds <n>] [--dry-run] [--allow-after-revise-cap]
+  dispatch --job <name> [--state-file <path>] [--phase-id <id>] [--write-scope <path>] [--phase-review-path <path> ...] [--override key=value ...] [--timeout-seconds <n>] [--worker codex|claude] [--model <model>] [--effort low|medium|high|xhigh|max] [--dry-run] [--allow-after-revise-cap]
+    --worker: worker 类型 (默认 codex). codex: OpenAI Codex CLI; claude: Claude Code CLI
+    --model: 模型名或别名 (codex: -m <model>; claude: --model <model>)
+    --effort: effort 级别 (claude 专用: low|medium|high|xhigh|max; codex 忽略)
     --allow-after-revise-cap: 仅用于 specAdversarialReview. spec_review_revise_count >= 2 时旁路一次硬 gate; 必须由用户明确授权才能加.
 `);
 }
@@ -583,6 +586,44 @@ function selectNextJob(phase, state) {
   return null;
 }
 
+function resolveTransportConfig(args) {
+  return {
+    worker_kind: args["worker"] ?? "codex",
+    model: args["model"] ?? null,
+    effort: args["effort"] ?? null,
+  };
+}
+
+function buildWorkerSpawn(transport, mode, { outputFile, threadId, prompt }) {
+  if (transport.worker_kind === "claude") {
+    const args = ["-p", "--output-format", "stream-json", "--dangerously-skip-permissions"];
+    if (transport.model) args.push("--model", transport.model);
+    if (transport.effort) args.push("--effort", transport.effort);
+    if (mode === "drive_resume" && threadId) args.push("--resume", threadId);
+    args.push(prompt);
+    return { binary: "claude", args };
+  }
+  // codex
+  const { binary, subcommand: sub, approvalBypassFlag: bypass } = manifest.transport.command;
+  if (mode === "worker_job") {
+    const cmdArgs = [sub, "--json", bypass];
+    if (transport.model) cmdArgs.push("-m", transport.model);
+    cmdArgs.push(prompt);
+    return { binary, args: cmdArgs };
+  }
+  if (mode === "drive_start") {
+    const cmdArgs = [sub, "--json", "-o", outputFile, bypass];
+    if (transport.model) cmdArgs.push("-m", transport.model);
+    cmdArgs.push(prompt);
+    return { binary, args: cmdArgs };
+  }
+  // drive_resume
+  const cmdArgs = [sub, "resume", "--json", "-o", outputFile, bypass];
+  if (transport.model) cmdArgs.push("-m", transport.model);
+  cmdArgs.push(threadId, prompt);
+  return { binary, args: cmdArgs };
+}
+
 function buildRunDispatchArgs(runArgs, selection) {
   const dispatchArgs = {};
 
@@ -601,6 +642,10 @@ function buildRunDispatchArgs(runArgs, selection) {
   if (selection.jobName === "finalSpecReview") {
     dispatchArgs["phase-review-path"] = selection.phaseReviewPaths;
   }
+
+  if (runArgs["worker"] != null) dispatchArgs["worker"] = runArgs["worker"];
+  if (runArgs["model"] != null) dispatchArgs["model"] = runArgs["model"];
+  if (runArgs["effort"] != null) dispatchArgs["effort"] = runArgs["effort"];
 
   return dispatchArgs;
 }
@@ -850,6 +895,7 @@ function buildDriveRecord(driveContext, args) {
     milestone_seq: 0,
     latest_milestone: null,
     thread_id: null,
+    transport: resolveTransportConfig(args),
     runner_pid: null,
     runner_started_at: null,
     codex_pid: null,
@@ -880,7 +926,7 @@ function findDriveMetaFileById(driveId) {
   return path.join(driveRunsRoot(), driveId, driveMetaFileName);
 }
 
-function buildJobRecord(jobContext, timeoutSeconds, attempt, beforeSnapshot) {
+function buildJobRecord(jobContext, timeoutSeconds, attempt, beforeSnapshot, transport) {
   const { iso } = timestampParts();
   return {
     schema_version: 1,
@@ -900,6 +946,7 @@ function buildJobRecord(jobContext, timeoutSeconds, attempt, beforeSnapshot) {
     meta_file: runMetaPath(jobContext),
     variables: jobContext.variables,
     recovery_snapshot: beforeSnapshot,
+    transport: transport ?? { worker_kind: "codex", model: null, effort: null },
     runner_pid: null,
     runner_started_at: null,
     worker_pid: null,
@@ -1250,33 +1297,19 @@ async function executeDetachedDriveRunner(metaFile) {
         timed_out: false,
       });
 
+      const driveTransport = current.transport ?? { worker_kind: "codex", model: null, effort: null };
       const run = await new Promise((resolve) => {
         let settled = false;
         let timedOut = false;
         let threadId = current.thread_id;
         let stdoutBuffer = "";
-        const args =
-          mode === "start"
-            ? [
-              manifest.transport.command.subcommand,
-              "--json",
-              "-o",
-              current.current_attempt_output_file,
-              manifest.transport.command.approvalBypassFlag,
-              prompt,
-            ]
-            : [
-              manifest.transport.command.subcommand,
-              "resume",
-              "--json",
-              "-o",
-              current.current_attempt_output_file,
-              manifest.transport.command.approvalBypassFlag,
-              current.thread_id,
-              prompt,
-            ];
+        const { binary, args } = buildWorkerSpawn(
+          driveTransport,
+          mode === "start" ? "drive_start" : "drive_resume",
+          { outputFile: current.current_attempt_output_file, threadId: current.thread_id, prompt },
+        );
 
-        const child = spawn(manifest.transport.command.binary, args, {
+        const child = spawn(binary, args, {
           cwd: root,
           stdio: ["ignore", "pipe", "pipe"],
         });
@@ -1306,8 +1339,17 @@ async function executeDetachedDriveRunner(metaFile) {
             if (line) {
               try {
                 const event = JSON.parse(line);
-                if (event.type === "thread.started" && event.thread_id) {
-                  threadId = event.thread_id;
+                if (driveTransport.worker_kind === "claude") {
+                  if (event.type === "system" && event.subtype === "init" && event.session_id) {
+                    threadId = event.session_id;
+                  }
+                  if (event.type === "result" && event.result) {
+                    writeFileSync(abs(current.current_attempt_output_file), event.result);
+                  }
+                } else {
+                  if (event.type === "thread.started" && event.thread_id) {
+                    threadId = event.thread_id;
+                  }
                 }
               } catch {}
             }
@@ -1894,19 +1936,12 @@ async function executeDetachedJobRunner(metaFile) {
     const run = await new Promise((resolve) => {
       let settled = false;
       let timedOut = false;
-      const child = spawn(
-        manifest.transport.command.binary,
-        [
-          manifest.transport.command.subcommand,
-          "--json",
-          manifest.transport.command.approvalBypassFlag,
-          promptContent,
-        ],
-        {
-          cwd: root,
-          stdio: ["ignore", stdoutFd, stderrFd],
-        },
-      );
+      const jobTransport = next.transport ?? { worker_kind: "codex", model: null, effort: null };
+      const { binary, args: workerArgs } = buildWorkerSpawn(jobTransport, "worker_job", { prompt: promptContent });
+      const child = spawn(binary, workerArgs, {
+        cwd: root,
+        stdio: ["ignore", stdoutFd, stderrFd],
+      });
 
       const started = {
         ...next,
@@ -2101,7 +2136,8 @@ async function executeDispatchJob(stateFile, jobName, args) {
     writeFileSync(jobContext.promptFile, `${currentPrompt}\n`);
     const recoveryConfig = getRecoveryConfig(jobName, jobContext);
     const beforeSnapshot = recoveryConfig?.path ? captureFileSnapshot(recoveryConfig.path) : null;
-    const record = buildJobRecord(jobContext, timeoutSeconds, attempt, beforeSnapshot);
+    const transport = resolveTransportConfig(args);
+    const record = buildJobRecord(jobContext, timeoutSeconds, attempt, beforeSnapshot, transport);
     writeJobRecord(record.meta_file, record);
     if (manifest.workerJobs[jobName].writesCode) {
       createRollbackAnchor(jobContext);
