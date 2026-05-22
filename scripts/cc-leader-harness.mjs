@@ -406,7 +406,7 @@ function readStatusFromMarkdown(filePath) {
   if (!filePath || !fileExists(filePath)) return null;
   const raw = readMarkdownField(filePath, "status");
   if (!raw) return null;
-  const value = raw.replace(/^["']|["']$/g, "").trim().toLowerCase();
+  const value = raw.replace(/^[`"']|[`"']$/g, "").trim().toLowerCase();
   if (!value || value.includes("|")) return null;
   return value;
 }
