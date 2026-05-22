@@ -361,8 +361,19 @@ function extractPhaseBlock(planPath, phaseId) {
   }
   if (!phaseId) return `(未指定 phase_id)`;
   const lines = readFileSync(abs(planPath), "utf8").split("\n");
-  const headingRe = new RegExp(`^###\\s.*${phaseId.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}`);
-  const start = lines.findIndex((line) => headingRe.test(line));
+  const escapedId = phaseId.replace(/[.*+?^${}()|[\\\]]/g, "\\$&");
+  const headingRe = new RegExp(`^###\\s.*${escapedId}`);
+  let start = lines.findIndex((line) => headingRe.test(line));
+  if (start === -1) {
+    // Fallback: find a ### section that contains "phase_id: <phaseId>" in its body
+    const fieldRe = new RegExp(`phase_id:\\s+\`?${escapedId}\`?`);
+    const fieldIdx = lines.findIndex((line) => fieldRe.test(line));
+    if (fieldIdx !== -1) {
+      for (let i = fieldIdx - 1; i >= 0; i -= 1) {
+        if (lines[i].startsWith("### ")) { start = i; break; }
+      }
+    }
+  }
   if (start === -1) {
     return `(phase plan 中未找到 ${phaseId} 的 \`### 阶段\` 块 — 用 shell 在 ${abs(planPath)} 里查)`;
   }
